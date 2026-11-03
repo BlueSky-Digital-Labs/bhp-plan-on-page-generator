@@ -31,8 +31,6 @@ export function useAccess() {
     return () => controller.abort();
   }, [check]);
 
-  const signedIn = useCallback((session: SessionInfo) => setState({ phase: "signed_in", session }), []);
-
   const signOut = useCallback(async () => {
     try {
       await endSession();
@@ -44,5 +42,5 @@ export function useAccess() {
     }
   }, []);
 
-  return { state, check: () => check(), signedIn, signOut };
+  return { state, check: () => check(), signOut };
 }

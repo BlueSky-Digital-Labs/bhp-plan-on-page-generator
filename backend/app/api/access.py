@@ -26,6 +26,10 @@ CSRF_COOKIE = "__Host-csrf"
 CSRF_HEADER = "X-CSRF-Token"
 _COOKIE = {"secure": True, "httponly": True, "samesite": "lax", "path": "/"}
 
+# Navigation contract with the conversation feature: where the SPA goes after a session is
+# created. The server decides this, so the client never composes a destination itself.
+CONVERSATION_ROUTE = "/conversation"
+
 router = APIRouter()
 
 
@@ -80,6 +84,18 @@ def current_session(
         raise _unauthenticated() from None
 
 
+@router.get("/access-state")
+def access_state(
+    request: Request, service: Annotated[AccessService, Depends(get_service)]
+) -> dict[str, bool]:
+    """Whether this browser may start a canvas. A boolean only: no secrets, no content."""
+    return {
+        "start_permitted": service.start_permitted(
+            request.cookies.get(GRANT_COOKIE), request.cookies.get(SESSION_COOKIE)
+        )
+    }
+
+
 @router.get("/csrf")
 def issue_csrf_token(response: Response) -> dict[str, str]:
     token = secrets.token_urlsafe(32)
@@ -111,7 +127,9 @@ def create_session(
     service: Annotated[AccessService, Depends(get_service)],
 ) -> dict[str, str]:
     try:
-        value, session = service.start_session(request.cookies.get(GRANT_COOKIE))
+        value, session = service.start_session(
+            request.cookies.get(GRANT_COOKIE), request.cookies.get(SESSION_COOKIE)
+        )
     except AccessRejected as exc:
         _log(request, "session_start_rejected", exc.reason)
         raise _unauthenticated() from None
@@ -122,6 +140,7 @@ def create_session(
     return {
         "created_at": session.created_at.isoformat(),
         "expires_at": session.expires_at.isoformat(),
+        "next": CONVERSATION_ROUTE,
     }
 
 

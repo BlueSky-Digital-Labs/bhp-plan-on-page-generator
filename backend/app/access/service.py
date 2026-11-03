@@ -56,17 +56,48 @@ class AccessService:
         )
         return value, int(GRANT_LIFETIME.total_seconds())
 
-    def start_session(self, grant_cookie: str | None) -> tuple[str, Session]:
-        """Consume a grant (once) and create a new, independent session record."""
-        if not grant_cookie:
+    def start_permitted(self, grant_cookie: str | None, session_cookie: str | None) -> bool:
+        """May this browser start a new canvas? True for a valid grant or an existing session.
+
+        Reveals nothing but a boolean. Without any cookie no secret lookup happens.
+        """
+        if not grant_cookie and not session_cookie:
+            return False
+        key = self._secrets.cookie_signing_key()
+        if grant_cookie:
+            try:
+                cookies.verify(key, grant_cookie, cookies.GRANT, int(self._clock().timestamp()))
+                return True
+            except AccessRejected:
+                pass
+        if session_cookie:
+            try:
+                self.load_session(session_cookie)
+                return True
+            except AccessRejected:
+                pass
+        return False
+
+    def start_session(
+        self, grant_cookie: str | None, session_cookie: str | None = None
+    ) -> tuple[str, Session]:
+        """Create a NEW, independent session record. Never resumes or overwrites one.
+
+        Authority is either a grant (consumed once) or an already-authorised session.
+        A presented grant must be valid and unused; it is never silently ignored.
+        """
+        if not grant_cookie and not session_cookie:
             raise AccessRejected("missing")  # no secret lookup for requests with nothing to verify
         key = self._secrets.cookie_signing_key()
         now = self._clock()
-        grant_id, grant_expiry = cookies.verify(
-            key, grant_cookie, cookies.GRANT, int(now.timestamp())
-        )
-        if not self._store.claim_grant(grant_id, datetime.fromtimestamp(grant_expiry, UTC)):
-            raise AccessRejected("grant_already_used")
+        if grant_cookie:
+            grant_id, grant_expiry = cookies.verify(
+                key, grant_cookie, cookies.GRANT, int(now.timestamp())
+            )
+            if not self._store.claim_grant(grant_id, datetime.fromtimestamp(grant_expiry, UTC)):
+                raise AccessRejected("grant_already_used")
+        else:
+            self.load_session(session_cookie)  # an existing, authorised session
 
         session = Session(
             session_id=secrets.token_urlsafe(32),  # 256-bit, server-generated, never client-chosen

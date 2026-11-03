@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { E2E_ACCESS_CODE, signIn, signInAndWait } from "./access";
+import { E2E_ACCESS_CODE, enterCode, signIn, signInAndWait } from "./access";
 
 const CID = "0123456789abcdef0123456789abcdef";
 
@@ -52,10 +52,7 @@ test("a real unknown API path returns the JSON envelope from the server", async 
 
 test("no console errors or CSP violations while signing in and using the app", async ({ page }) => {
   const problems: string[] = [];
-  page.on("console", (msg) => {
-    // The first load asks "am I signed in?" and gets a 401: expected, and logged by the browser.
-    if (msg.type() === "error" && !/status of 401/.test(msg.text())) problems.push(msg.text());
-  });
+  page.on("console", (msg) => msg.type() === "error" && problems.push(msg.text()));
   page.on("pageerror", (err) => problems.push(err.message));
   await signInAndWait(page);
   await expect(page.getByTestId("status-result")).toBeVisible();
@@ -95,7 +92,7 @@ test.describe("access code", () => {
   });
 
   test("a wrong code is refused with a generic message and creates no session", async ({ page, context }) => {
-    await signIn(page, "definitely-wrong");
+    await enterCode(page, "definitely-wrong");
     await expect(page.getByRole("alert")).toContainText("That access code was not recognised.");
     await expect(page.getByLabel("Access code", { exact: true })).toHaveValue("");
     await expect(page.getByText(/Complete the AI Opportunity Canvas/)).toHaveCount(0);
@@ -137,5 +134,85 @@ test.describe("access code", () => {
     await page.reload();
     await expect(page.getByText(/Complete the AI Opportunity Canvas/)).toBeVisible();
     await other.close();
+  });
+});
+
+test.describe("entry and start screens", () => {
+  test("opening /start directly without access returns to entry with neutral guidance", async ({ page }) => {
+    await page.goto("/start");
+    await expect(page.getByRole("heading", { name: "Enter the access code" })).toBeVisible();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("status")).toContainText("Your access has expired or has not been entered");
+    await expect(page.getByRole("button", { name: "Start a new canvas" })).toHaveCount(0);
+  });
+
+  test("opening /conversation directly without a session returns to entry", async ({ page }) => {
+    await page.goto("/conversation");
+    await expect(page.getByRole("heading", { name: "Enter the access code" })).toBeVisible();
+    await expect(page.getByText(/Complete the AI Opportunity Canvas/)).toHaveCount(0);
+  });
+
+  test("a correct code leads to the start screen, which survives a refresh", async ({ page }) => {
+    await enterCode(page);
+    await expect(page.getByRole("heading", { name: "Start a new canvas", level: 1 })).toBeVisible();
+    await expect(page).toHaveURL(/\/start$/);
+    await page.reload(); // the backend serves the app and re-verifies access
+    await expect(page.getByRole("heading", { name: "Start a new canvas", level: 1 })).toBeVisible();
+  });
+
+  test("the start screen explains the journey, saving and the data lifecycle", async ({ page }) => {
+    await enterCode(page);
+    const main = page.locator("main");
+    await expect(main).toContainText("Describe your idea");
+    await expect(main).toContainText("Save both the one-page canvas and the appendix");
+    await expect(main).toContainText("not submit anything to a backlog");
+    await expect(main).toContainText("Australian-hosted");
+    await expect(main).toContainText("24 hours");
+    await expect(main).toContainText("even if you close the browser");
+    await expect(main).toContainText("not a statement that data-handling approval has been granted");
+  });
+
+  test("the whole flow works from the keyboard", async ({ page }) => {
+    await page.goto("/");
+    await page.getByLabel("Access code", { exact: true }).focus();
+    await page.keyboard.type(E2E_ACCESS_CODE);
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { name: "Start a new canvas", level: 1 })).toBeVisible();
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("button", { name: "Start a new canvas" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.getByText(/Complete the AI Opportunity Canvas/)).toBeVisible();
+  });
+
+  test("starting again creates a fresh canvas and never resumes the earlier one", async ({ page, context }) => {
+    await signInAndWait(page);
+    const first = (await context.cookies()).find((c) => c.name === "__Host-session")!.value;
+    await page.goto("/start"); // an existing session may start another canvas
+    await page.getByRole("button", { name: "Start a new canvas" }).click();
+    await expect(page.getByText(/Complete the AI Opportunity Canvas/)).toBeVisible();
+    const second = (await context.cookies()).find((c) => c.name === "__Host-session")!.value;
+    expect(second).not.toBe(first);
+  });
+
+  test("a failed start is retryable and the code is never kept in browser storage", async ({ page }) => {
+    await enterCode(page);
+    await page.route("**/api/sessions", (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { code: "service_unavailable", message: "SERVER-TEXT", correlation_id: CID } }),
+      }),
+    );
+    await page.getByRole("button", { name: "Start a new canvas" }).click();
+    await expect(page.getByRole("alert")).toContainText("Something went wrong. Please try again.");
+    await expect(page.locator("body")).not.toContainText("SERVER-TEXT");
+    await expect(page.getByRole("button", { name: "Start a new canvas" })).toBeEnabled();
+
+    await page.unroute("**/api/sessions");
+    await page.getByRole("button", { name: "Start a new canvas" }).click();
+    await expect(page.getByText(/Complete the AI Opportunity Canvas/)).toBeVisible();
+
+    const stored = await page.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }));
+    expect(stored).toBe("{}{}");
   });
 });

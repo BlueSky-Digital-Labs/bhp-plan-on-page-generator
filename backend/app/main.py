@@ -2,6 +2,7 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.access.errors import DependencyUnavailable
 from app.access.service import AccessService
@@ -12,6 +13,25 @@ from app.config import Settings, get_settings
 from app.errors import register_exception_handlers
 from app.logging_config import configure_logging
 from app.middleware import RequestContextMiddleware
+
+
+class SpaStaticFiles(StaticFiles):
+    """Serve the compiled app, falling back to index.html for client-side routes.
+
+    Direct navigation or refresh on /start must load the React app (which then asks the backend
+    whether access is allowed). Only extension-less, non-API paths fall back: a missing asset or
+    an unknown /api path still returns the JSON 404 envelope. Protection is enforced by the API,
+    not by which HTML is served.
+    """
+
+    async def get_response(self, path, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            leaf = path.rsplit("/", 1)[-1]
+            if exc.status_code == 404 and not path.startswith("api") and "." not in leaf:
+                return await super().get_response("index.html", scope)
+            raise
 
 
 def create_app(
@@ -40,7 +60,7 @@ def create_app(
 
     # Same-origin serving of the compiled Vite build. Mounted last so /api wins.
     if (settings.static_dir / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="frontend")
+        app.mount("/", SpaStaticFiles(directory=settings.static_dir, html=True), name="frontend")
     else:
         logging.getLogger("app").info("frontend_build_absent")
     return app

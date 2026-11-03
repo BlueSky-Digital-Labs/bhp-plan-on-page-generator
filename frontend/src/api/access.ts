@@ -10,6 +10,11 @@ export function getSession(signal?: AbortSignal): Promise<SessionInfo> {
   return apiRequest<SessionInfo>("/api/session", { signal });
 }
 
+// Boolean only. The cookies are HttpOnly, so the page asks the server instead of reading them.
+export function getAccessState(signal?: AbortSignal): Promise<{ start_permitted: boolean }> {
+  return apiRequest<{ start_permitted: boolean }>("/api/access-state", { signal });
+}
+
 export function submitAccessCode(code: string): Promise<{ status: string }> {
   return apiRequest<{ status: string }>("/api/access", {
     method: "POST",
@@ -18,8 +23,12 @@ export function submitAccessCode(code: string): Promise<{ status: string }> {
   });
 }
 
-export function startSession(): Promise<SessionInfo> {
-  return apiRequest<SessionInfo>("/api/sessions", { method: "POST", csrf: true });
+export interface StartedSession extends SessionInfo {
+  next: string; // server-authorised route to continue to
+}
+
+export function startSession(): Promise<StartedSession> {
+  return apiRequest<StartedSession>("/api/sessions", { method: "POST", csrf: true });
 }
 
 export function endSession(): Promise<void> {

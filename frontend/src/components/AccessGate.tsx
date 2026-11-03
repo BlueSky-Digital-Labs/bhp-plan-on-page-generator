@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react";
-import { type SessionInfo, startSession, submitAccessCode } from "../api/access";
+import { submitAccessCode } from "../api/access";
 import { ApiError } from "../api/client";
 import { ErrorNotice } from "./ErrorNotice";
 
@@ -14,7 +14,7 @@ function messageFor(error: ApiError): string | null {
   return null; // anything else uses the generic ErrorNotice
 }
 
-export function AccessGate({ onSignedIn }: { onSignedIn: (session: SessionInfo) => void }) {
+export function AccessGate({ onAccepted }: { onAccepted: () => void }) {
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -24,16 +24,17 @@ export function AccessGate({ onSignedIn }: { onSignedIn: (session: SessionInfo) 
     if (!code || submitting) return;
     setSubmitting(true);
     setError(null);
+    let accepted = false;
     try {
-      await submitAccessCode(code); // valid code -> short-lived grant cookie
-      const session = await startSession(); // grant -> private session cookie
-      onSignedIn(session);
+      await submitAccessCode(code); // valid code -> short-lived access grant cookie
+      accepted = true;
     } catch (caught) {
       setError(caught instanceof ApiError ? caught : new ApiError(null, "client_error", null));
     } finally {
       setCode(""); // never keep the code around once it has been submitted
       setSubmitting(false);
     }
+    if (accepted) onAccepted();
   }
 
   const friendly = error ? messageFor(error) : null;
@@ -41,7 +42,7 @@ export function AccessGate({ onSignedIn }: { onSignedIn: (session: SessionInfo) 
   return (
     <section aria-labelledby="access-heading" className="card access">
       <h2 id="access-heading">Enter the access code</h2>
-      <p>Enter the code you were given to start your own private canvas.</p>
+      <p>Enter the access code you were given to continue.</p>
       <form onSubmit={handleSubmit}>
         <div className="field">
           <label htmlFor="access-code">Access code</label>
@@ -59,11 +60,13 @@ export function AccessGate({ onSignedIn }: { onSignedIn: (session: SessionInfo) 
             aria-describedby={error ? "access-error" : undefined}
           />
         </div>
-        {error && friendly && (
-          <p id="access-error" role="alert" className="access__error">
-            {friendly}
-          </p>
-        )}
+        <div aria-live="polite">
+          {error && friendly && (
+            <p id="access-error" role="alert" className="access__error">
+              {friendly}
+            </p>
+          )}
+        </div>
         {error && !friendly && <ErrorNotice error={error} />}
         <button type="submit" disabled={!code || submitting}>
           {submitting ? "Checking…" : "Continue"}

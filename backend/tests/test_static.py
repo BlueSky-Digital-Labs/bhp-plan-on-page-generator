@@ -15,3 +15,24 @@ def test_api_takes_precedence_over_static(client):
 def test_no_cors_headers_are_emitted(client):
     response = client.get("/api/health", headers={"Origin": "https://evil.example"})
     assert "access-control-allow-origin" not in response.headers
+
+
+def test_client_side_routes_load_the_app_on_direct_navigation_or_refresh(client):
+    for path in ("/start", "/conversation", "/start/"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert "<title>spa</title>" in response.text
+
+
+def test_unknown_api_paths_never_fall_back_to_html(client):
+    response = client.get("/api/nope")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+    assert "<title>spa</title>" not in response.text
+
+
+def test_missing_assets_are_404_not_the_app_shell(client):
+    for path in ("/missing.js", "/assets/missing.css", "/favicon.ico"):
+        response = client.get(path)
+        assert response.status_code == 404, path
+        assert response.json()["error"]["code"] == "not_found"

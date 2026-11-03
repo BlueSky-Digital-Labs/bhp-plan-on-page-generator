@@ -6,12 +6,16 @@ code. Code: `backend/app/access/`, routes: `backend/app/api/access.py`.
 
 ## Flow
 
+Browser routes (served by the same React app; the API decides who may see what):
+`/` access code, `/start` start screen, `/conversation` where a started session continues.
+
 | Step | Request | Result |
 | --- | --- | --- |
-| 1 | `GET /api/csrf` | Returns `{csrf_token}` and sets the `__Host-csrf` cookie. |
-| 2 | `POST /api/access` (form field `access_code`, header `X-CSRF-Token`) | Valid: `200` and a signed **grant** cookie (10 min). Invalid: `401 invalid_access_code`, nothing issued. |
-| 3 | `POST /api/sessions` (header `X-CSRF-Token`) | Consumes the grant **once**, creates a new server-side record, replaces the grant with a signed **session** cookie. `201`. |
-| 4 | `GET /api/session` / `DELETE /api/session` | Read or end the caller's own session. |
+| 1 | `GET /api/access-state` | `{"start_permitted": true\|false}`. Always `200`, a boolean only: true for a valid, unexpired grant **or** an existing valid session. The cookies are HttpOnly, so the page asks the server instead of reading them. |
+| 2 | `GET /api/csrf` | Returns `{csrf_token}` and sets the `__Host-csrf` cookie. |
+| 3 | `POST /api/access` (form field `access_code`, header `X-CSRF-Token`) | Valid: `200` and a signed **grant** cookie (10 min). Invalid: `401 invalid_access_code`, nothing issued. |
+| 4 | `POST /api/sessions` (header `X-CSRF-Token`, no body) | Creates a **new** independent record. Authority is a grant (consumed once) or an already-authorised session. Replaces the grant with a signed **session** cookie. `201` with `{created_at, expires_at, next}`; `next` is the server-chosen route (`/conversation`). |
+| 5 | `GET /api/session` / `DELETE /api/session` | Read or end the caller's own session. |
 
 The originally described HTMX responses and redirects are JSON plus `Set-Cookie`, as the
 React/JSON contract requires; the SPA decides where to navigate.
@@ -33,8 +37,9 @@ React/JSON contract requires; the SPA decides where to navigate.
   in a query string, header or body can select another session; endpoints only ever act on
   the session in the caller's own signed cookie.
 * **Fixed 24 h expiry**, set at creation and never extended by activity. Starting another
-  canvas creates a new independent record (it needs a fresh grant) and never touches
-  existing records, which keep their original expiry.
+  canvas (with a fresh grant, or from an existing session) creates a new independent record and
+  never touches existing records, which keep their original expiry. A grant that is presented
+  but already used is rejected, never silently replaced by the session.
 * **Grants are single use**, claimed with a conditional write, so a replayed grant cookie
   cannot create further sessions.
 * **CSRF / cross-site:** every state-changing route requires a same-origin `Origin`
@@ -142,14 +147,30 @@ individual items from the sessions table removes specific sessions.
 
 ## Frontend
 
-`App` asks the server whether this browser has a session (`GET /api/session`; a 401 means
-"not signed in"). Signed out, it shows only the **access screen** (`AccessGate`): the code
-goes to `POST /api/access`, then `POST /api/sessions` starts the private session and the
-workspace appears. Signed in, there is a **Sign out** button that deletes the session. All
-messages are fixed copy keyed on the error code (wrong code, service unavailable, generic
-with a correlation reference); nothing from a response body is rendered, and the code field
-is cleared after every submit. The session cookie is HttpOnly, so page JavaScript can't read
-it.
+Three routes, a small history-based hook (`src/router.ts`) and no routing library:
+
+* `/`: asks `GET /api/access-state`; a browser that already has access goes straight to
+  `/start`, otherwise it sees the access form (`AccessGate`). A correct code goes to `/start`.
+* `/start`: shows only a loading state until the backend has answered, so protected content
+  never flashes. Without access it returns to `/` with a neutral "your access has expired or
+  has not been entered" note. With access it shows the explainer (journey, saving both
+  documents yourself, nothing is submitted to a backlog, temporary Australian-hosted
+  processing, purge after both downloads, automatic deletion after 24 hours, and no claim that
+  data-handling approval has been granted) and the single **Start a new canvas** action. The
+  action is disabled while pending, can be retried after a failure, and a `401` sends the user
+  back to entry.
+* `/conversation`: the route the conversation feature will fill. It requires a real session
+  (checked by the backend) and for now shows the canvas workspace. **Navigation contract:** the
+  server's `next` value decides where to go; the client follows only a plain in-app path
+  (`safeRoute`) and otherwise falls back to `/conversation`, so a bad response can never
+  redirect off-site.
+
+Direct navigation or refresh on `/start` or `/conversation` works because the backend serves
+the app for extension-less non-API paths (`SpaStaticFiles`); `/api/*` and missing files still
+return the JSON error envelope. Protection never depends on which HTML is served. All
+messages are fixed copy keyed on the error code; nothing from a response body is rendered, the
+code field is cleared after every submit, and nothing is written to localStorage or
+sessionStorage.
 
 ## Local development
 
