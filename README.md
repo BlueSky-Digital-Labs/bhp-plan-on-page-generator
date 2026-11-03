@@ -3,13 +3,15 @@
 Browser application for roughly 50 WAIO ROC users to complete the Plan on a Page journey
 (Edge and Chrome). This repo is the application foundation: a React + TypeScript + Vite
 frontend and a FastAPI backend, packaged as one container for AWS ECS Fargate (Sydney).
-Feature work builds on the [React/JSON contract](docs/frontend-contract.md).
+Feature work builds on the [React/JSON contract](docs/frontend-contract.md). Entry and
+sessions are described in [docs/access-control.md](docs/access-control.md), including the
+access-code rotation runbook.
 
 ```
 backend/    FastAPI app (app/), pytest tests, uv project (pyproject.toml + uv.lock)
 frontend/   Vite + React + TypeScript, Vitest tests, Playwright smoke checks (e2e/)
 Dockerfile  Multi-stage build, non-root runtime, same-origin serving
-docs/       frontend-contract.md, bedrock.md
+docs/       frontend-contract.md, bedrock.md, access-control.md
 ```
 
 Requires [uv](https://docs.astral.sh/uv/) (it installs Python 3.13 itself) and Node 22+
@@ -67,7 +69,8 @@ group health check at `/api/health`.
 | `AWS_REGION` | no | Default `ap-southeast-2`. |
 | `LOG_LEVEL` | no | Default `INFO`. JSON logs, metadata only. |
 | `STATIC_DIR` | no | Compiled assets; set to `/app/static` in the image. |
-| `ACCESS_CODE_HASH`, `COOKIE_SIGNING_KEY` | later | Secrets; supplied from Secrets Manager, never committed or built into assets. |
+| `SESSIONS_TABLE_NAME`, `ACCESS_CODE_HASH_SECRET_ID`, `COOKIE_SIGNING_KEY_SECRET_ID` | when `deployed` | Names of the DynamoDB table and the two Secrets Manager secrets for access control. Identifiers only, never secret values. See [docs/access-control.md](docs/access-control.md). |
+| `ACCESS_CODE_HASH`, `COOKIE_SIGNING_KEY` | local only | Local/test secret values. Deployed reads Secrets Manager through the task role; never committed or built into assets. |
 
 Bedrock model selection and generation settings (`BEDROCK_*`) are documented, with
 precedence and examples, in [docs/bedrock.md](docs/bedrock.md). **No model is approved yet**:

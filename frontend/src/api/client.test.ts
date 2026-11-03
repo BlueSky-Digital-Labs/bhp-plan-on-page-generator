@@ -49,6 +49,37 @@ describe("apiRequest", () => {
     );
   });
 
+  it("sends a form body without a JSON content type", async () => {
+    const fetchMock = mockFetch(json({ status: "ok" }));
+    await apiRequest("/api/access", { method: "POST", form: { access_code: "a b&c" } });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(init.body)).toBe("access_code=a+b%26c");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+  });
+
+  it("fetches a CSRF token first and sends it as X-CSRF-Token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ csrf_token: "tok" }))
+      .mockResolvedValueOnce(json({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    await apiRequest("/api/sessions", { method: "POST", csrf: true });
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/csrf");
+    expect(fetchMock.mock.calls[1][1].headers["X-CSRF-Token"]).toBe("tok");
+  });
+
+  it("does not send the state-changing request if the CSRF token cannot be fetched", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(json({ error: { code: "x", message: "m", correlation_id: CID } }, { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(apiRequest("/api/sessions", { method: "POST", csrf: true })).rejects.toBeInstanceOf(ApiError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a 204 when the endpoint is declared as no-content", async () => {
+    mockFetch(new Response(null, { status: 204 }));
+    await expect(apiRequest("/api/session", { method: "DELETE", noContent: true })).resolves.toBeUndefined();
+  });
+
   it("refuses paths outside /api/", async () => {
     mockFetch(json({}));
     await expect(apiRequest("https://elsewhere.example/api/x")).rejects.toThrow("same-origin");

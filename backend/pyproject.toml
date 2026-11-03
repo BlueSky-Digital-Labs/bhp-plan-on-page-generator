@@ -3,9 +3,11 @@ name = "plan-on-a-page-backend"
 version = "0.0.0"
 requires-python = ">=3.13"
 dependencies = [
+    "argon2-cffi>=25.1.0",
     "boto3>=1.43.123",
     "fastapi>=0.162,<1",
     "pydantic-settings>=2.16,<3",
+    "python-multipart>=0.0.33",
     "uvicorn>=0.54,<1",
 ]
 

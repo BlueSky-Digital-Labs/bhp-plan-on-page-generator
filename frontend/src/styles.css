@@ -66,3 +66,18 @@ button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
 .field input:focus-visible, .field textarea:focus-visible { outline: 3px solid var(--fg); outline-offset: 1px; }
 
 .status { margin-top: 1.5rem; }
+
+.access { max-width: 28rem; }
+.access__error { color: var(--danger-fg); background: var(--danger-bg); padding: 0.5rem 0.75rem; border-radius: 0.375rem; }
+.field input[type="password"] {
+  width: 100%; font: inherit; padding: 0.5rem; border: 1px solid var(--border); border-radius: 0.375rem;
+}
+.field input[type="password"]:focus-visible { outline: 3px solid var(--fg); outline-offset: 1px; }
+.session-bar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; color: var(--muted); font-size: 0.875rem; }
+.button--secondary { background: transparent; color: var(--accent); }
+
+.start h2 { font-size: 1.125rem; margin-top: 0.25rem; }
+.start ol, .start ul { margin: 0.25rem 0 0.5rem; padding-left: 1.25rem; }
+.start__note { color: var(--muted); font-size: 0.875rem; margin-bottom: 0; }
+.start { margin-bottom: 1rem; }
+.notice { background: #eef3fb; color: #1d3f72; padding: 0.5rem 0.75rem; border-radius: 0.375rem; }

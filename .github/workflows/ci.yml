@@ -81,7 +81,9 @@ jobs:
         run: |
           [ "$(docker run --rm --entrypoint id plan-on-a-page -u)" != "0" ]
           ! docker run --rm plan-on-a-page >/dev/null 2>&1
-          docker run -d --name app -e APP_ENV=deployed -p 8000:8000 plan-on-a-page
+          docker run -d --name app -e APP_ENV=deployed \
+            -e SESSIONS_TABLE_NAME=ci-placeholder -e ACCESS_CODE_HASH_SECRET_ID=ci-placeholder \
+            -e COOKIE_SIGNING_KEY_SECRET_ID=ci-placeholder -p 8000:8000 plan-on-a-page
           for _ in $(seq 1 30); do
             [ "$(docker inspect -f '{{.State.Health.Status}}' app)" = healthy ] && break
             sleep 2

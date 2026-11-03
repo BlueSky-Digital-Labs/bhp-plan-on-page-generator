@@ -50,6 +50,12 @@ function isEnvelope(body: unknown): body is ApiErrorEnvelope {
 export interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
+  // application/x-www-form-urlencoded body (used by POST /api/access). Mutually exclusive with body.
+  form?: Record<string, string>;
+  // State-changing requests: fetch a CSRF token first and send it as X-CSRF-Token.
+  csrf?: boolean;
+  // The endpoint answers 204 with no body on success.
+  noContent?: boolean;
   signal?: AbortSignal;
 }
 
@@ -58,16 +64,28 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     throw new Error("apiRequest only calls same-origin /api/ paths");
   }
 
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (options.csrf) {
+    const { csrf_token } = await apiRequest<{ csrf_token: string }>("/api/csrf", {
+      signal: options.signal,
+    });
+    headers["X-CSRF-Token"] = csrf_token;
+  }
+  let body: BodyInit | undefined;
+  if (options.form) {
+    body = new URLSearchParams(options.form); // the browser sets the form content type
+  } else if (options.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(options.body);
+  }
+
   let response: Response;
   try {
     response = await fetch(path, {
       method: options.method ?? "GET",
       credentials: "same-origin",
-      headers: {
-        Accept: "application/json",
-        ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
-      },
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      headers,
+      body,
       signal: options.signal,
     });
   } catch (cause) {
@@ -77,24 +95,26 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   const headerCorrelationId = safeCorrelationId(response.headers.get("X-Correlation-ID"));
 
-  let body: unknown;
+  if (options.noContent && response.status === 204) return undefined as T;
+
+  let payload: unknown;
   try {
-    body = await response.json();
+    payload = await response.json();
   } catch {
-    body = undefined;
+    payload = undefined;
   }
 
   if (!response.ok) {
-    if (isEnvelope(body)) {
-      const { code, correlation_id } = body.error;
+    if (isEnvelope(payload)) {
+      const { code, correlation_id } = payload.error;
       throw new ApiError(response.status, code, safeCorrelationId(correlation_id) ?? headerCorrelationId);
     }
     // Not our envelope (e.g. a gateway error page): keep only the status.
     throw new ApiError(response.status, "unexpected_response", headerCorrelationId);
   }
 
-  if (body === undefined) {
+  if (payload === undefined) {
     throw new ApiError(response.status, "invalid_response", headerCorrelationId);
   }
-  return body as T;
+  return payload as T;
 }

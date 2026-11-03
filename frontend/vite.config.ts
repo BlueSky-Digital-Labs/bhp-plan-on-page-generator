@@ -10,7 +10,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: { "/api": BACKEND_DEV_URL },
+    // changeOrigin must stay false: the backend rejects state-changing requests whose Origin does
+    // not match the Host it receives, so the browser's Host (localhost:5173) has to reach it intact.
+    proxy: { "/api": { target: BACKEND_DEV_URL, changeOrigin: false } },
   },
   test: {
     environment: "jsdom",
