@@ -113,7 +113,7 @@ class DynamoSessionStore:
         try:
             return Session(
                 session_id=item["session_id"]["S"],
-                created_at=datetime.fromisoformat(item["created_at"]["S"]),
+                created_at=datetime.fromisoformat(item["created_at"]["S"]).replace(tzinfo=UTC),
                 expires_at=datetime.fromtimestamp(int(item["expires_at"]["N"]), UTC),
             )
         except (KeyError, ValueError):
