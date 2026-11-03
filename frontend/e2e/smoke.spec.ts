@@ -55,3 +55,27 @@ test("no console errors or CSP violations on load", async ({ page }) => {
   await expect(page.getByTestId("status-result")).toBeVisible();
   expect(problems).toEqual([]);
 });
+
+test("user can complete the canvas and see all required fields satisfied", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("canvas-progress")).toContainText("14 required fields remaining.");
+  for (const label of [
+    "Solution Name",
+    "Team",
+    "Current Process",
+    "Pain Points",
+    "Future State Vision",
+    "What do we want to achieve through AI?",
+    "What does success look like?",
+    "Who will use this solution?",
+    "What decision will it improve?",
+    "What data is needed?",
+    "What systems must connect?",
+    "Key risks and dependencies?",
+  ]) {
+    await page.getByLabel(label).fill("x");
+  }
+  await page.getByRole("radio", { name: "High" }).check();
+  await page.getByRole("checkbox", { name: "Analyse Data" }).check();
+  await expect(page.getByTestId("canvas-progress")).toHaveText("All required fields are complete.");
+});

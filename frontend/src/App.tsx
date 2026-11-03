@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { getServiceStatus } from "./api/endpoints";
+import { CanvasForm } from "./components/CanvasForm";
 import { ErrorNotice } from "./components/ErrorNotice";
 import { Layout } from "./components/Layout";
 import { Loading } from "./components/Loading";
@@ -15,9 +16,12 @@ export function App() {
   return (
     <Layout>
       <h1>Plan on a Page</h1>
-      <p>The application foundation is running. Features will be added here.</p>
+      <p>Complete the AI Opportunity Canvas. Fields marked * are required.</p>
 
-      <section aria-labelledby="status-heading" className="card">
+      <CanvasForm />
+
+      <section aria-labelledby="status-heading" className="card status">
+
         <h2 id="status-heading">Service status</h2>
         {state.phase === "loading" && <Loading label="Checking service…" />}
         {state.phase === "success" && (
