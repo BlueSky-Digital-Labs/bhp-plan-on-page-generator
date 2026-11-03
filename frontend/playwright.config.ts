@@ -28,6 +28,7 @@ export default defineConfig({
       STATIC_DIR: "../frontend/dist",
       ACCESS_CODE_HASH: E2E_ACCESS_CODE_HASH,
       COOKIE_SIGNING_KEY: E2E_COOKIE_SIGNING_KEY,
+      CONVERSATION_PRODUCER: "test", // scripted replies; a real assistant is a later feature
     },
   },
 });

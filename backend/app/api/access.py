@@ -159,6 +159,7 @@ def end_own_session(
     session: Annotated[Session, Depends(current_session)],
     service: Annotated[AccessService, Depends(get_service)],
 ) -> Response:
+    request.app.state.conversation.delete_session(session.session_id)
     service.end_session(session.session_id)
     _log(request, "session_ended")
     response = Response(status_code=204)

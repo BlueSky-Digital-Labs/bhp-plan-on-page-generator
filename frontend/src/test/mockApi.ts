@@ -33,3 +33,30 @@ export function mockApi(routes: Record<string, Handler | Handler[]>) {
 }
 
 export const csrfRoute = () => json({ csrf_token: "test-csrf-token" });
+
+const encoder = new TextEncoder();
+
+/** A whole NDJSON stream response in one go. `breakAfter` makes the connection fail at the end. */
+export function ndjson(events: unknown[], options: { breakAfter?: boolean } = {}): Response {
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent < events.length) controller.enqueue(encoder.encode(`${JSON.stringify(events[sent++])}\n`));
+      else if (options.breakAfter) controller.error(new TypeError("connection lost"));
+      else controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
+}
+
+/** A stream the test drives by hand, so it can look at the screen between events. */
+export function controlledStream() {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({ start: (c) => (controller = c) });
+  return {
+    response: () => new Response(body, { status: 200, headers: { "Content-Type": "application/x-ndjson" } }),
+    push: (event: unknown) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)),
+    end: () => controller.close(),
+    fail: () => controller.error(new TypeError("connection lost")),
+  };
+}

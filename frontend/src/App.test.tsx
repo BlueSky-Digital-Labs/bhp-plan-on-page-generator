@@ -9,6 +9,7 @@ const PERMITTED = () => json({ start_permitted: true });
 const NOT_PERMITTED = () => json({ start_permitted: false });
 const SIGNED_IN = () => json(SESSION);
 const STATUS = () => json({ status: "ok", environment: "test" });
+const EMPTY_CONVERSATION = () => json({ revision: 0, turns: [] });
 const STARTED = (next = "/conversation") => () => json({ ...SESSION, next }, 201);
 
 function at(path: string) {
@@ -117,12 +118,12 @@ describe("protected route /start", () => {
       "GET /api/csrf": csrfRoute,
       "POST /api/sessions": STARTED(),
       "GET /api/session": SIGNED_IN,
-      "GET /api/status": STATUS,
+      "GET /api/conversation": EMPTY_CONVERSATION,
     });
     at("/start");
     render(<App />);
     await userEvent.click(await screen.findByRole("button", { name: "Start a new canvas" }));
-    expect(await screen.findByText(/Complete the AI Opportunity Canvas/)).toBeInTheDocument();
+    expect(await screen.findByLabelText("Describe your idea")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/conversation");
   });
 
@@ -132,7 +133,7 @@ describe("protected route /start", () => {
       "GET /api/csrf": csrfRoute,
       "POST /api/sessions": STARTED("https://evil.example/steal"),
       "GET /api/session": SIGNED_IN,
-      "GET /api/status": STATUS,
+      "GET /api/conversation": EMPTY_CONVERSATION,
     });
     at("/start");
     render(<App />);
@@ -164,23 +165,33 @@ describe("conversation route", () => {
     at("/conversation");
     render(<App />);
     expect(await screen.findByLabelText("Access code")).toBeInTheDocument();
-    expect(screen.queryByText(/Complete the AI Opportunity Canvas/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Describe your idea")).not.toBeInTheDocument();
   });
 
-  it("shows the workspace for a valid session, and signing out returns to entry", async () => {
+  it("shows the conversation for a valid session, and signing out returns to entry", async () => {
     mockApi({
       "GET /api/session": SIGNED_IN,
-      "GET /api/status": STATUS,
+      "GET /api/conversation": EMPTY_CONVERSATION,
       "GET /api/csrf": csrfRoute,
       "DELETE /api/session": () => new Response(null, { status: 204 }),
       "GET /api/access-state": NOT_PERMITTED,
     });
     at("/conversation");
     render(<App />);
-    expect(await screen.findByTestId("status-result")).toHaveTextContent("Service is ok (test).");
+    expect(await screen.findByLabelText("Describe your idea")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     expect(await screen.findByLabelText("Access code")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/");
+  });
+});
+
+describe("canvas route (the original template form)", () => {
+  it("still works for a signed-in session", async () => {
+    mockApi({ "GET /api/session": SIGNED_IN, "GET /api/status": STATUS });
+    at("/canvas");
+    render(<App />);
+    expect(await screen.findByTestId("status-result")).toHaveTextContent("Service is ok (test).");
+    expect(screen.getByText(/Complete the AI Opportunity Canvas/)).toBeInTheDocument();
   });
 
   it("shows only a generic message and a reference when the status API fails", async () => {
@@ -188,7 +199,7 @@ describe("conversation route", () => {
       "GET /api/session": SIGNED_IN,
       "GET /api/status": () => envelope("internal_error", 500, CID),
     });
-    at("/conversation");
+    at("/canvas");
     render(<App />);
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("Something went wrong. Please try again.");
@@ -214,12 +225,12 @@ describe("routing and browser storage", () => {
       "POST /api/access": () => json({ status: "ok" }),
       "POST /api/sessions": STARTED(),
       "GET /api/session": SIGNED_IN,
-      "GET /api/status": STATUS,
+      "GET /api/conversation": EMPTY_CONVERSATION,
     });
     render(<App />);
     await userEvent.type(await screen.findByLabelText("Access code"), "right-code{Enter}");
     await userEvent.click(await screen.findByRole("button", { name: "Start a new canvas" }));
-    await screen.findByText(/Complete the AI Opportunity Canvas/);
+    await screen.findByLabelText("Describe your idea");
     expect(local).not.toHaveBeenCalled();
     expect(localStorage.length + sessionStorage.length).toBe(0);
   });

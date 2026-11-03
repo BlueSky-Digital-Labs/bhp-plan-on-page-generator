@@ -2,7 +2,12 @@ import { useEffect, useState } from "react";
 
 // Three browser routes and no routing library. Direct navigation and refresh work because the
 // backend serves the app for these paths; whether a route may be viewed is decided by the API.
-export const ROUTES = { entry: "/", start: "/start", conversation: "/conversation" } as const;
+export const ROUTES = {
+  entry: "/",
+  start: "/start",
+  conversation: "/conversation",
+  canvas: "/canvas", // the original template form, kept reachable but not linked
+} as const;
 
 export type NavigateOptions = { replace?: boolean; notice?: "access_required" };
 
