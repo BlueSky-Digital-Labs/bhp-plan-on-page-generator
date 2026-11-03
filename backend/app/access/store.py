@@ -55,7 +55,8 @@ class InMemorySessionStore:
             self.sessions[session.session_id] = session
 
     def get(self, session_id: str) -> Session | None:
-        return self.sessions.get(session_id)
+        with self._lock:
+            return self.sessions.get(session_id)
 
     def delete(self, session_id: str) -> None:
         self.sessions.pop(session_id, None)
