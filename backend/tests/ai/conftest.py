@@ -19,10 +19,13 @@ from app.ai.policy import (
 
 SECRET = "SECRET-PLAN-CONTENT-DO-NOT-LEAK"
 
+# Fixed, not today(): fixtures must not depend on the clock (Evidence rejects future dates).
+VERIFIED_ON = dt.date(2026, 1, 1)
+
 
 def _evidence() -> Evidence:
     return Evidence(
-        verified_on=dt.date.today(),
+        verified_on=VERIFIED_ON,
         verified_by="test fixture",
         regional="fixture: synthetic destinations",
         privacy="fixture: synthetic",

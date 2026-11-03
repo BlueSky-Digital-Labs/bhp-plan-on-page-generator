@@ -223,6 +223,45 @@ def test_forced_tool_with_no_tool_call_is_not_committable(config_b):
     assert result.end.failure.code is FailureCode.MISSING_TOOL_CALL
 
 
+class Other(BaseModel):
+    note: str
+
+
+OTHER_TOOL = ToolDefinition(name="other_tool", description="Another tool.", input_model=Other)
+
+
+def test_forced_tool_with_rejected_call_is_not_committable_and_reports_why(config_b):
+    # The model "calls" the forced tool but with invalid input: nothing valid was produced.
+    events = tool_events("tu-1", "write_field", {"title": "Plan"}, stop="end_turn")
+    _, adapter = run(config_b, events)
+    result = adapter.collect(
+        ConverseRequest(messages=MESSAGES, tools=[TOOL], tool_choice="write_field")
+    )
+    assert result.tool_calls == []
+    assert result.rejected == [ToolInputRejected("tu-1", ToolRejection.SCHEMA_VIOLATION)]
+    assert not result.committable
+    assert result.end.failure.code is FailureCode.INVALID_TOOL_INPUT
+
+
+def test_named_tool_choice_is_not_satisfied_by_a_different_valid_tool(config_b):
+    events = tool_events("tu-1", "other_tool", {"note": "x"})
+    _, adapter = run(config_b, events)
+    request = ConverseRequest(
+        messages=MESSAGES, tools=[TOOL, OTHER_TOOL], tool_choice="write_field"
+    )
+    result = adapter.collect(request)
+    assert [c.name for c in result.tool_calls] == ["other_tool"]  # valid, but not the forced one
+    assert not result.committable
+    assert result.end.failure.code is FailureCode.MISSING_TOOL_CALL
+
+
+def test_any_tool_choice_accepts_any_validated_tool(config_b):
+    events = tool_events("tu-1", "other_tool", {"note": "x"})
+    _, adapter = run(config_b, events)
+    request = ConverseRequest(messages=MESSAGES, tools=[TOOL, OTHER_TOOL], tool_choice="any")
+    assert adapter.collect(request).committable
+
+
 # --- interrupted and abnormal streams ------------------------------------------------
 
 

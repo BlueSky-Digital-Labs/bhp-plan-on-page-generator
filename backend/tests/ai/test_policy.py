@@ -10,7 +10,7 @@ from app.ai.policy import (
     Evidence,
     validate_bedrock_config,
 )
-from tests.ai.conftest import REGISTRY, SELECTION_A, SELECTION_B
+from tests.ai.conftest import REGISTRY, SELECTION_A, SELECTION_B, VERIFIED_ON
 
 AU = "ap-southeast-2"
 
@@ -138,9 +138,7 @@ def test_an_unsafe_approval_entry_cannot_exist(overrides):
 
 
 def test_evidence_must_be_complete_and_not_future_dated():
-    ok = dict(
-        verified_on=dt.date.today(), verified_by="a", regional="r", privacy="p", capabilities="c"
-    )
+    ok = dict(verified_on=VERIFIED_ON, verified_by="a", regional="r", privacy="p", capabilities="c")
     with pytest.raises(ValueError):
         Evidence(**ok, sources=())
     with pytest.raises(ValueError):

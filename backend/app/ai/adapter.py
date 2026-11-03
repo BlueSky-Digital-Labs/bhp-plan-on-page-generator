@@ -79,7 +79,7 @@ class _Turn:
         self.usage: Usage | None = None
         self.failure: Failure | None = None
         self.rejected = False
-        self.tool_calls = 0
+        self.called: set[str] = set()  # names of tools with a validated call
 
     def handle(self, event: dict[str, Any]) -> Iterator[StreamEvent]:
         for key, aws_code in STREAM_ERROR_EVENTS.items():
@@ -141,13 +141,19 @@ class _Turn:
             except (ValidationError, TypeError):
                 reason = ToolRejection.SCHEMA_VIOLATION
             else:
-                self.tool_calls += 1
+                self.called.add(buffer.name)
                 return ToolCall(tool_use_id=buffer.tool_use_id, name=buffer.name, input=validated)
         self.rejected = True
         # Reason code only: the rejected input is never retained or logged.
         return ToolInputRejected(
             tool_use_id=buffer.tool_use_id, reason=reason or ToolRejection.INVALID_JSON
         )
+
+    def _tool_choice_satisfied(self, tool_choice: str | None) -> bool:
+        """A forced choice needs a *validated* call: any tool for "any", else that tool."""
+        if tool_choice is None:
+            return True
+        return bool(self.called) if tool_choice == "any" else tool_choice in self.called
 
     def end(self, *, tool_choice: str | None) -> StreamEnd:
         failure = self.failure
@@ -160,7 +166,7 @@ class _Turn:
                 failure = Failure(_INCOMPLETE_REASONS[self.stop_reason], partial_output=True)
             elif self.stop_reason not in _COMPLETE_REASONS:
                 failure = Failure(FailureCode.UNKNOWN_STOP_REASON, partial_output=True)
-            elif tool_choice is not None and self.tool_calls == 0:
+            elif not self._tool_choice_satisfied(tool_choice):
                 failure = Failure(FailureCode.MISSING_TOOL_CALL, partial_output=self.emitted)
         if failure is None:
             return StreamEnd(CompletionStatus.COMPLETE, self.stop_reason, self.usage)
