@@ -5,7 +5,9 @@ const CID = "0123456789abcdef0123456789abcdef";
 test("page renders and completes a real API round trip", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Plan on a Page", level: 1 })).toBeVisible();
-  await expect(page.getByTestId("status-result")).toHaveText("Service is ok (deployed).");
+  // Status "ok" is the API's healthy contract. The environment name depends on how the
+  // backend was started (deployed in CI, local when reusing a dev server), so only require one.
+  await expect(page.getByTestId("status-result")).toHaveText(/^Service is ok \(\w+\)\.$/);
 });
 
 test("user can re-run the API interaction", async ({ page }) => {
@@ -54,4 +56,28 @@ test("no console errors or CSP violations on load", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("status-result")).toBeVisible();
   expect(problems).toEqual([]);
+});
+
+test("user can complete the canvas and see all required fields satisfied", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("canvas-progress")).toContainText("14 required fields remaining.");
+  for (const label of [
+    "Solution Name",
+    "Team",
+    "Current Process",
+    "Pain Points",
+    "Future State Vision",
+    "What do we want to achieve through AI?",
+    "What does success look like?",
+    "Who will use this solution?",
+    "What decision will it improve?",
+    "What data is needed?",
+    "What systems must connect?",
+    "Key risks and dependencies?",
+  ]) {
+    await page.getByLabel(label).fill("x");
+  }
+  await page.getByRole("radio", { name: "High" }).check();
+  await page.getByRole("checkbox", { name: "Analyse Data" }).check();
+  await expect(page.getByTestId("canvas-progress")).toHaveText("All required fields are complete.");
 });
