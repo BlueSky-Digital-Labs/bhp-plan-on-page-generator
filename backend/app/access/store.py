@@ -59,7 +59,8 @@ class InMemorySessionStore:
             return self.sessions.get(session_id)
 
     def delete(self, session_id: str) -> None:
-        self.sessions.pop(session_id, None)
+        with self._lock:
+            self.sessions.pop(session_id, None)
 
     def claim_grant(self, grant_id: str, expires_at: datetime) -> bool:
         with self._lock:
