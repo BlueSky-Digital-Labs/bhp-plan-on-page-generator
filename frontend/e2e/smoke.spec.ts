@@ -5,7 +5,9 @@ const CID = "0123456789abcdef0123456789abcdef";
 test("page renders and completes a real API round trip", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Plan on a Page", level: 1 })).toBeVisible();
-  await expect(page.getByTestId("status-result")).toHaveText("Service is ok (deployed).");
+  // Status "ok" is the API's healthy contract. The environment name depends on how the
+  // backend was started (deployed in CI, local when reusing a dev server), so only require one.
+  await expect(page.getByTestId("status-result")).toHaveText(/^Service is ok \(\w+\)\.$/);
 });
 
 test("user can re-run the API interaction", async ({ page }) => {
