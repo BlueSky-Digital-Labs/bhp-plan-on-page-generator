@@ -33,12 +33,33 @@ def new_correlation_id() -> str:
     return uuid.uuid4().hex
 
 
-def error_response(status_code: int, code: str, message: str, correlation_id: str) -> JSONResponse:
+def error_response(
+    status_code: int,
+    code: str,
+    message: str,
+    correlation_id: str,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content={"error": {"code": code, "message": message, "correlation_id": correlation_id}},
-        headers={CORRELATION_HEADER: correlation_id},
+        headers={**(headers or {}), CORRELATION_HEADER: correlation_id},
     )
+
+
+class ApiProblem(Exception):
+    """A deliberate failure with a fixed, content-free message (never user or provider text)."""
+
+    def __init__(
+        self, status_code: int, code: str, message: str, headers: dict[str, str] | None = None
+    ) -> None:
+        super().__init__(code)
+        self.status_code, self.code, self.message, self.headers = (
+            status_code,
+            code,
+            message,
+            headers,
+        )
 
 
 def correlation_id_of(request: Request) -> str:
@@ -74,6 +95,11 @@ async def _validation_error(request: Request, exc: RequestValidationError) -> JS
     return error_response(422, "invalid_request", GENERIC_MESSAGES[422], cid)
 
 
+async def _api_problem(request: Request, exc: ApiProblem) -> JSONResponse:
+    cid = correlation_id_of(request)
+    return error_response(exc.status_code, exc.code, exc.message, cid, exc.headers)
+
+
 def unexpected_error_response(request_scope_state: dict, exc: Exception) -> JSONResponse:
     cid = request_scope_state.get("correlation_id") or new_correlation_id()
     # Exception class only: messages can contain submitted text.
@@ -87,3 +113,4 @@ def unexpected_error_response(request_scope_state: dict, exc: Exception) -> JSON
 def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(StarletteHTTPException, _http_exception)
     app.add_exception_handler(RequestValidationError, _validation_error)
+    app.add_exception_handler(ApiProblem, _api_problem)

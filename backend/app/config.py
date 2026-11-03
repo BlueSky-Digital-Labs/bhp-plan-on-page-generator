@@ -10,7 +10,7 @@ from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr, ValidationError, ValidationInfo, field_validator
+from pydantic import Field, SecretStr, ValidationError, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # Compiled Vite assets. Required to exist when deployed.
     static_dir: Path = Path("static")
 
+    # Access control. These are identifiers (names/ARNs), not secret values. All three are
+    # required when deployed so a misconfigured deployment fails at startup, not at first use.
+    sessions_table_name: str | None = Field(default=None, validate_default=True)
+    access_code_hash_secret_id: str | None = Field(default=None, validate_default=True)
+    cookie_signing_key_secret_id: str | None = Field(default=None, validate_default=True)
+
     @property
     def is_deployed(self) -> bool:
         return self.app_env is AppEnv.DEPLOYED
@@ -48,6 +54,15 @@ class Settings(BaseSettings):
         if info.data.get("app_env") is AppEnv.DEPLOYED and not (value / "index.html").is_file():
             raise ValueError("must contain the compiled frontend when deployed")
         return value
+
+    @field_validator(
+        "sessions_table_name", "access_code_hash_secret_id", "cookie_signing_key_secret_id"
+    )
+    @classmethod
+    def _required_when_deployed(cls, value: str | None, info: ValidationInfo) -> str | None:
+        if info.data.get("app_env") is AppEnv.DEPLOYED and not value:
+            raise ValueError("required when deployed")
+        return value or None
 
 
 class Secrets(BaseSettings):

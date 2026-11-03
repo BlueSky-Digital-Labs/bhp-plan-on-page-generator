@@ -13,6 +13,7 @@ _METADATA_FIELDS = (
     "input_tokens",
     "output_tokens",
     "latency_ms",
+    "reason",
 )
 
 # At DEBUG these libraries log request and response parameters, i.e. prompts and

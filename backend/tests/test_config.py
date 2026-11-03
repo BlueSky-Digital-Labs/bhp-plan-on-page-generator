@@ -27,6 +27,9 @@ def test_deployed_requires_compiled_frontend(monkeypatch, tmp_path):
 def test_deployed_starts_with_frontend_and_hides_docs(monkeypatch, static_dir):
     monkeypatch.setenv("APP_ENV", "deployed")
     monkeypatch.setenv("STATIC_DIR", str(static_dir))
+    monkeypatch.setenv("SESSIONS_TABLE_NAME", "sessions")
+    monkeypatch.setenv("ACCESS_CODE_HASH_SECRET_ID", "access-hash")
+    monkeypatch.setenv("COOKIE_SIGNING_KEY_SECRET_ID", "cookie-key")
     app = create_app()
     assert app.docs_url is None and app.openapi_url is None
 
@@ -41,3 +44,14 @@ def test_secrets_are_masked_and_optional(monkeypatch):
     secrets = Secrets()
     assert "do-not-print-me" not in repr(secrets)
     assert "do-not-print-me" not in str(secrets)
+
+
+def test_deployed_requires_access_control_identifiers(monkeypatch, static_dir):
+    monkeypatch.setenv("APP_ENV", "deployed")
+    monkeypatch.setenv("STATIC_DIR", str(static_dir))
+    monkeypatch.setenv("SESSIONS_TABLE_NAME", "sessions")  # the two secret ids are missing
+    with pytest.raises(ConfigError) as excinfo:
+        get_settings()
+    assert "access_code_hash_secret_id" in str(excinfo.value)
+    assert "cookie_signing_key_secret_id" in str(excinfo.value)
+    assert "sessions_table_name" not in str(excinfo.value)
