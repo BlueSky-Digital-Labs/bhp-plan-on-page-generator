@@ -45,7 +45,7 @@ class InferenceConfig(BaseModel):
             "maxTokens": self.max_tokens,
             "temperature": self.temperature,
             "topP": self.top_p,
-            "stopSequences": list(self.stop_sequences) if self.stop_sequences is not None else None,
+            "stopSequences": list(self.stop_sequences) if self.stop_sequences else None,
         }
         return {key: value for key, value in fields.items() if value is not None}
 
