@@ -1,0 +1,175 @@
+"""Approved-model policy: what may actually be invoked, with dated evidence.
+
+A configured identifier is only *usable* if an `ApprovedSelection` names it. An entry
+exists only after someone has verified, for that exact identifier, the Australian-only
+inference destinations, the provider data-handling position, the ConverseStream and
+tool capabilities, and the IAM resources (procedure: docs/bedrock.md). Changing the
+model therefore needs a new or updated entry here, not just a new identifier.
+
+`APPROVED_SELECTIONS` is empty on purpose: nothing has been verified yet, and a model
+must never be added from memory.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import math
+from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any
+
+from app.ai.config import BedrockConfig, BedrockSelectionError
+
+# Australian AWS Regions. Every client region and every inference destination must be here.
+AUSTRALIAN_REGIONS = frozenset({"ap-southeast-2", "ap-southeast-4"})
+
+
+class Capability(StrEnum):
+    CONVERSE_STREAM = "converse_stream"
+    TOOL_USE = "tool_use"
+    FORCED_TOOL_CHOICE = "forced_tool_choice"
+
+
+class IdentifierKind(StrEnum):
+    FOUNDATION_MODEL = "foundation_model"
+    INFERENCE_PROFILE = "inference_profile"
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """Dated, sourced verification. Every field is required."""
+
+    verified_on: dt.date
+    verified_by: str
+    regional: str  # how Australian-only processing was established, incl. every destination
+    privacy: str  # provider prompt storage / training position and where it is documented
+    capabilities: str  # how ConverseStream + tool support were established
+    sources: tuple[str, ...]  # authoritative URLs or console/CLI outputs
+
+    def __post_init__(self) -> None:
+        texts = (self.verified_by, self.regional, self.privacy, self.capabilities)
+        if not all(t.strip() for t in texts) or not self.sources or not all(self.sources):
+            raise ValueError("evidence must be complete")
+        if self.verified_on > dt.date.today():
+            raise ValueError("evidence date is in the future")
+
+
+@dataclass(frozen=True)
+class ApprovedSelection:
+    model_id: str
+    identifier_kind: IdentifierKind
+    # Underlying foundation models, for IAM resources behind a profile.
+    foundation_model_ids: tuple[str, ...]
+    client_regions: tuple[str, ...]
+    # EVERY region the request can be processed in (for a direct model id: the client region).
+    inference_regions: tuple[str, ...]
+    capabilities: frozenset[Capability]
+    evidence: Evidence
+    # Model-specific limits for the generation settings.
+    max_tokens_limit: int
+    temperature_range: tuple[float, float]
+    top_p_range: tuple[float, float]
+    max_stop_sequences: int  # 0 = stop sequences unsupported
+    temperature_and_top_p_exclusive: bool
+    allowed_additional_fields: frozenset[str]  # top-level keys only
+    require_max_tokens: bool = True  # unset maxTokens reserves the model maximum of quota
+
+    def __post_init__(self) -> None:
+        problems: list[str] = []
+        if not self.model_id or not self.foundation_model_ids:
+            problems.append("identifiers")
+        if not self.client_regions or not set(self.client_regions) <= AUSTRALIAN_REGIONS:
+            problems.append("client_regions")
+        if not self.inference_regions or not set(self.inference_regions) <= AUSTRALIAN_REGIONS:
+            problems.append("inference_regions")
+        if not {Capability.CONVERSE_STREAM, Capability.TOOL_USE} <= self.capabilities:
+            problems.append("capabilities")
+        if self.max_tokens_limit < 1 or self.max_stop_sequences < 0:
+            problems.append("limits")
+        for low, high in (self.temperature_range, self.top_p_range):
+            if not (math.isfinite(low) and math.isfinite(high) and 0 <= low <= high):
+                problems.append("ranges")
+        if problems:
+            raise ValueError(f"invalid approved selection: {', '.join(dict.fromkeys(problems))}")
+
+
+# Verified entries only. See docs/bedrock.md for the checklist and the evidence register.
+APPROVED_SELECTIONS: tuple[ApprovedSelection, ...] = ()
+
+
+@dataclass(frozen=True)
+class ValidatedBedrockConfig:
+    """A configuration that passed the policy. This is what the adapter accepts."""
+
+    config: BedrockConfig
+    selection: ApprovedSelection
+
+    def supports(self, capability: Capability) -> bool:
+        return capability in self.selection.capabilities
+
+
+def validate_bedrock_config(
+    config: BedrockConfig, approved: Sequence[ApprovedSelection] | None = None
+) -> ValidatedBedrockConfig:
+    """Check the effective configuration against the approved policy.
+
+    Raises BedrockSelectionError listing every problem found, as codes plus setting
+    names. There is no fallback: an unapproved or incompatible selection is rejected,
+    never replaced by another model or silently adjusted.
+    """
+    registry = APPROVED_SELECTIONS if approved is None else tuple(approved)
+    selection = next((s for s in registry if s.model_id == config.model_id), None)
+    if selection is None:
+        raise BedrockSelectionError(["unapproved_model"], ["model_id"])
+
+    codes: list[str] = []
+    settings: list[str] = []
+
+    def reject(code: str, setting: str) -> None:
+        codes.append(code)
+        settings.append(setting)
+
+    if config.region not in AUSTRALIAN_REGIONS or config.region not in selection.client_regions:
+        reject("region_not_approved", "region")
+
+    inference = config.inference_config
+    max_tokens = inference.max_tokens if inference else None
+    temperature = inference.temperature if inference else None
+    top_p = inference.top_p if inference else None
+    stops = inference.stop_sequences if inference else None
+
+    if max_tokens is None and selection.require_max_tokens:
+        reject("missing_setting", "inference_config.max_tokens")
+    if max_tokens is not None and max_tokens > selection.max_tokens_limit:
+        reject("unsupported_setting", "inference_config.max_tokens")
+    if temperature is not None and not (
+        selection.temperature_range[0] <= temperature <= selection.temperature_range[1]
+    ):
+        reject("unsupported_setting", "inference_config.temperature")
+    if top_p is not None and not (selection.top_p_range[0] <= top_p <= selection.top_p_range[1]):
+        reject("unsupported_setting", "inference_config.top_p")
+    if stops is not None and len(stops) > selection.max_stop_sequences:
+        reject("unsupported_setting", "inference_config.stop_sequences")
+    if selection.temperature_and_top_p_exclusive and temperature is not None and top_p is not None:
+        reject("incompatible_settings", "inference_config.temperature, inference_config.top_p")
+
+    extra: dict[str, Any] | None = config.additional_model_request_fields
+    if extra is not None and not set(extra) <= selection.allowed_additional_fields:
+        reject("unsupported_setting", "additional_model_request_fields")
+
+    if codes:
+        raise BedrockSelectionError(codes, settings)
+    return ValidatedBedrockConfig(config=config, selection=selection)
+
+
+__all__ = [
+    "APPROVED_SELECTIONS",
+    "AUSTRALIAN_REGIONS",
+    "ApprovedSelection",
+    "Capability",
+    "Evidence",
+    "IdentifierKind",
+    "ValidatedBedrockConfig",
+    "validate_bedrock_config",
+]

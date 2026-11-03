@@ -59,7 +59,7 @@ class Secrets(BaseSettings):
     cookie_signing_key: SecretStr | None = None
 
 
-def _failed_fields(exc: ValidationError) -> str:
+def failed_fields(exc: ValidationError) -> str:
     # Pydantic's own message echoes input values; report field names only.
     names = sorted({".".join(str(p) for p in err["loc"]) or "settings" for err in exc.errors()})
     return ", ".join(names)
@@ -70,7 +70,7 @@ def get_settings() -> Settings:
     try:
         return Settings()  # type: ignore[call-arg]  # populated from the environment
     except ValidationError as exc:
-        raise ConfigError(f"Invalid or missing configuration: {_failed_fields(exc)}") from None
+        raise ConfigError(f"Invalid or missing configuration: {failed_fields(exc)}") from None
 
 
 @lru_cache
@@ -78,4 +78,4 @@ def get_secrets() -> Secrets:
     try:
         return Secrets()
     except ValidationError as exc:
-        raise ConfigError(f"Invalid secrets configuration: {_failed_fields(exc)}") from None
+        raise ConfigError(f"Invalid secrets configuration: {failed_fields(exc)}") from None

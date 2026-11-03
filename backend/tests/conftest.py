@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,8 @@ from app.main import create_app
 @pytest.fixture(autouse=True)
 def _clean_config_cache(monkeypatch):
     for name in ("APP_ENV", "STATIC_DIR", "AWS_REGION", "LOG_LEVEL"):
+        monkeypatch.delenv(name, raising=False)
+    for name in [n for n in os.environ if n.startswith("BEDROCK_")]:
         monkeypatch.delenv(name, raising=False)
     get_settings.cache_clear()
     get_secrets.cache_clear()

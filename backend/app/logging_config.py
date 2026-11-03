@@ -3,7 +3,21 @@
 import json
 import logging
 
-_METADATA_FIELDS = ("correlation_id", "status", "exception_type")
+_METADATA_FIELDS = (
+    "correlation_id",
+    "status",
+    "exception_type",
+    "model_id",
+    "stop_reason",
+    "failure_code",
+    "input_tokens",
+    "output_tokens",
+    "latency_ms",
+)
+
+# At DEBUG these libraries log request and response parameters, i.e. prompts and
+# completions. They are held at WARNING regardless of LOG_LEVEL.
+_SDK_LOGGERS = ("boto3", "botocore", "urllib3", "s3transfer")
 
 
 class JsonFormatter(logging.Formatter):
@@ -22,3 +36,5 @@ def configure_logging(level: str) -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level.upper())
+    for name in _SDK_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
