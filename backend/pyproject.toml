@@ -1,0 +1,31 @@
+[project]
+name = "plan-on-a-page-backend"
+version = "0.0.0"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.162,<1",
+    "pydantic-settings>=2.16,<3",
+    "uvicorn>=0.54,<1",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16,<3",
+    "pytest>=9,<10",
+    "ruff>=0.17,<1",
+]
+
+[tool.uv]
+# An application, not an installable package: the code is run from app/.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
