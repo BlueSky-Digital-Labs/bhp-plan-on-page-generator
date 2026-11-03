@@ -62,7 +62,8 @@ async def _http_exception(request: Request, exc: StarletteHTTPException) -> JSON
     status = exc.status_code
     fallback = INTERNAL_MESSAGE if status >= 500 else GENERIC_MESSAGES[400]
     message = GENERIC_MESSAGES.get(status, fallback)
-    logger.warning("http_error", extra={"correlation_id": cid, "status": status})
+    log = logger.error if status >= 500 else logger.warning
+    log("http_error", extra={"correlation_id": cid, "status": status})
     return error_response(status, _code_for(status), message, cid)
 
 
