@@ -83,7 +83,7 @@ def current_session(
 @router.get("/csrf")
 def issue_csrf_token(response: Response) -> dict[str, str]:
     token = secrets.token_urlsafe(32)
-    response.set_cookie(CSRF_COOKIE, token, max_age=24 * 3600, **_CSRF_COOKIE_OPTS)
+    response.set_cookie(CSRF_COOKIE, token, max_age=24 * 3600, **_COOKIE)
     return {"csrf_token": token}
 
 
