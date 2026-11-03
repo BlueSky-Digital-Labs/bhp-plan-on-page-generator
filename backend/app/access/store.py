@@ -35,21 +35,33 @@ class SessionStore(Protocol):
 
     def delete(self, session_id: str) -> None: ...
 
-    def claim_grant(self, grant_id: str, expires_at: datetime) -> bool:
-        """Atomically mark a grant used. False if it was already claimed."""
+    def claim_grant(self, grant_id: str, expires_at: datetime, now: datetime) -> bool:
+        """Atomically mark a grant used. False if it was already claimed.
+
+        `now` is the caller's clock. An expired grant is already refused at signature time,
+        so a store may forget claims whose `expires_at` has passed without allowing a replay.
+        """
         ...
 
 
 class InMemorySessionStore:
-    """Local development and tests only: state is lost on restart and not shared."""
+    """Local development and tests only: state is lost on restart and not shared.
+
+    Expired grants and sessions are dropped as new ones arrive, so a long-running local
+    process does not grow without bound. (DynamoDB relies on its TTL attribute instead.)
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self.sessions: dict[str, Session] = {}
-        self._grants: set[str] = set()
+        self._grants: dict[str, datetime] = {}  # grant id -> its expiry
 
     def create(self, session: Session) -> None:
         with self._lock:
+            # session.created_at is the service clock's "now"; anything expired by then is gone.
+            self.sessions = {
+                sid: s for sid, s in self.sessions.items() if s.expires_at > session.created_at
+            }
             if session.session_id in self.sessions:
                 raise DependencyUnavailable("session_id_collision")
             self.sessions[session.session_id] = session
@@ -62,11 +74,13 @@ class InMemorySessionStore:
         with self._lock:
             self.sessions.pop(session_id, None)
 
-    def claim_grant(self, grant_id: str, expires_at: datetime) -> bool:
+    def claim_grant(self, grant_id: str, expires_at: datetime, now: datetime) -> bool:
         with self._lock:
+            # Safe to forget expired claims: their cookies are rejected before reaching here.
+            self._grants = {g: exp for g, exp in self._grants.items() if exp > now}
             if grant_id in self._grants:
                 return False
-            self._grants.add(grant_id)
+            self._grants[grant_id] = expires_at
             return True
 
 
@@ -126,7 +140,7 @@ class DynamoSessionStore:
         except (ClientError, BotoCoreError):
             raise DependencyUnavailable("store") from None
 
-    def claim_grant(self, grant_id: str, expires_at: datetime) -> bool:
+    def claim_grant(self, grant_id: str, expires_at: datetime, now: datetime) -> bool:
         return self._put_new(
             {
                 "session_id": {"S": _GRANT_PREFIX + grant_id},

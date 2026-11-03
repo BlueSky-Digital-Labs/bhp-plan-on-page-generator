@@ -94,7 +94,9 @@ class AccessService:
             grant_id, grant_expiry = cookies.verify(
                 key, grant_cookie, cookies.GRANT, int(now.timestamp())
             )
-            if not self._store.claim_grant(grant_id, datetime.fromtimestamp(grant_expiry, UTC)):
+            if not self._store.claim_grant(
+                grant_id, datetime.fromtimestamp(grant_expiry, UTC), now
+            ):
                 raise AccessRejected("grant_already_used")
         else:
             self.load_session(session_cookie)  # an existing, authorised session

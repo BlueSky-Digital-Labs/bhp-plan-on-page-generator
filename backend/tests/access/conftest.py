@@ -66,9 +66,9 @@ class FlakyStore(InMemorySessionStore):
         self._check()
         return super().get(session_id)
 
-    def claim_grant(self, grant_id, expires_at):
+    def claim_grant(self, grant_id, expires_at, now):
         self._check()
-        return super().claim_grant(grant_id, expires_at)
+        return super().claim_grant(grant_id, expires_at, now)
 
 
 class Clock:

@@ -7,7 +7,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 
 from app.access.errors import DependencyUnavailable
 from app.access.secrets import EnvSecretProvider, SecretsManagerProvider
-from app.access.store import DynamoSessionStore, Session
+from app.access.store import DynamoSessionStore, InMemorySessionStore, Session
 from tests.ai.conftest import SECRET
 
 LEAKY = {"Error": {"Code": "X", "Message": SECRET}, "ResponseMetadata": {}}
@@ -174,8 +174,8 @@ def test_get_uses_consistent_reads_and_round_trips():
 def test_grants_are_single_use_and_namespaced_away_from_sessions():
     client = FakeDynamo()
     store = DynamoSessionStore(client, "sessions")
-    assert store.claim_grant("g1", NOW + timedelta(minutes=10)) is True
-    assert store.claim_grant("g1", NOW + timedelta(minutes=10)) is False
+    assert store.claim_grant("g1", NOW + timedelta(minutes=10), NOW) is True
+    assert store.claim_grant("g1", NOW + timedelta(minutes=10), NOW) is False
     assert "grant#g1" in client.items and store.get("g1") is None
 
 
@@ -189,7 +189,7 @@ def test_store_failures_fail_closed_without_provider_text(error):
     for call in (
         lambda: store.create(SESSION),
         lambda: store.get("x"),
-        lambda: store.claim_grant("g", NOW),
+        lambda: store.claim_grant("g", NOW, NOW),
     ):
         with pytest.raises(DependencyUnavailable) as excinfo:
             call()
@@ -201,3 +201,31 @@ def test_corrupt_record_fails_closed_instead_of_granting_access():
     client.items["sid-1"] = {"session_id": {"S": "sid-1"}}  # missing expiry
     with pytest.raises(DependencyUnavailable):
         DynamoSessionStore(client, "sessions").get("sid-1")
+
+
+# --- in-memory store: bounded memory, without weakening single use ---------------------
+
+
+def test_in_memory_store_forgets_expired_grants_but_never_an_unexpired_one():
+    store = InMemorySessionStore()
+    soon = NOW + timedelta(minutes=10)
+    assert store.claim_grant("old", soon, NOW) is True
+    assert store.claim_grant("live", NOW + timedelta(hours=1), NOW) is True
+
+    later = soon + timedelta(seconds=1)  # "old" has expired; "live" has not
+    assert store.claim_grant("new", later + timedelta(minutes=10), later) is True
+    assert set(store._grants) == {"live", "new"}  # the expired claim was dropped
+    assert store.claim_grant("live", NOW + timedelta(hours=1), later) is False  # still single use
+
+
+def test_in_memory_store_drops_expired_sessions_when_new_ones_arrive():
+    store = InMemorySessionStore()
+    first = Session("s1", NOW, NOW + timedelta(hours=24))
+    store.create(first)
+    mid = NOW + timedelta(hours=1)
+    store.create(Session("s2", mid, mid + timedelta(hours=24)))
+    assert set(store.sessions) == {"s1", "s2"}  # nothing expired yet: nothing dropped
+
+    after = first.expires_at + timedelta(seconds=1)
+    store.create(Session("s3", after, after + timedelta(hours=24)))
+    assert set(store.sessions) == {"s2", "s3"}  # s1 expired and was pruned
