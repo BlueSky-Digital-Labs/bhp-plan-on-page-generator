@@ -1,0 +1,54 @@
+version: 1
+project:
+  type: web
+services:
+  - name: backend
+    role: web
+    path: backend
+    build:
+      dockerfile: backend/Dockerfile
+      context: backend
+    port: 8000
+    health:
+      path: /api/health/
+      grace_seconds: 90
+    resources:
+      cpu: 512
+      memory: 1024
+    command: gunicorn core.wsgi:application --bind 0.0.0.0:8000
+    env:
+      DJANGO_SETTINGS_MODULE: core.settings
+      DJANGO_ENV: local
+      ALLOWED_HOSTS: "*"
+      DB_PORT: "5432"
+    secrets:
+      - SECRET_KEY
+      - DB_PASSWORD
+      - DEMO_ADMIN_PASSWORD
+    depends_on:
+      - database
+  - name: frontend
+    role: web
+    path: frontend
+    build:
+      dockerfile: frontend/Dockerfile
+      context: frontend
+    port: 3000
+    health:
+      path: /
+      grace_seconds: 60
+    resources:
+      cpu: 256
+      memory: 512
+resources:
+  database:
+    engine: postgres
+    version: "15"
+migrate:
+  command: python manage.py migrate
+seed:
+  command: python manage.py seed_demo
+  demo_login:
+    url_path: /
+    username: demo@sunset.dev
+    password_secret: DEMO_ADMIN_PASSWORD

@@ -1,0 +1,8 @@
+[submodule "frontend"]
+	path = frontend
+	url = git@github.com:BlueSky-Digital-Labs/react-js-django-monorepo-starter-frontend-sunset.git
+	branch = main
+[submodule "backend"]
+	path = backend
+	url = git@github.com:BlueSky-Digital-Labs/react-js-django-monorepo-starter-backend-sunset.git
+	branch = main
