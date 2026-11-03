@@ -6,6 +6,7 @@ attempt without a restart. The signing key is cached briefly (it is not what Jun
 Any lookup problem raises DependencyUnavailable: the caller fails closed.
 """
 
+import threading
 import time
 from collections.abc import Callable
 from typing import Any, Protocol
@@ -48,6 +49,7 @@ class SecretsManagerProvider:
             clock,
         )
         self._key: tuple[bytes, float] | None = None
+        self._key_lock = threading.Lock()  # requests run on a thread pool
 
     def _fetch(self, secret_id: str) -> str:
         try:
@@ -59,10 +61,18 @@ class SecretsManagerProvider:
         return self._fetch(self._hash_id)  # deliberately uncached
 
     def cookie_signing_key(self) -> bytes:
-        now = self._clock()
-        if self._key is None or self._key[1] <= now:
-            self._key = (_checked_key(self._fetch(self._key_id)), now + KEY_CACHE_SECONDS)
-        return self._key[0]
+        cached = self._key
+        if cached is not None and cached[1] > self._clock():
+            return cached[0]
+        with self._key_lock:
+            now = self._clock()
+            cached = self._key  # another thread may have refreshed it while this one waited
+            if cached is None or cached[1] <= now:
+                cached = self._key = (
+                    _checked_key(self._fetch(self._key_id)),
+                    now + KEY_CACHE_SECONDS,
+                )
+            return cached[0]
 
 
 class EnvSecretProvider:

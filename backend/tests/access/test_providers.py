@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -52,6 +54,27 @@ def test_signing_key_is_cached_briefly_then_refreshed():
     ticker.t = 61
     p.cookie_signing_key()
     assert sm.calls.count("key-id") == 2
+
+
+def test_concurrent_requests_share_one_signing_key_fetch():
+    sm, p = provider()
+    fetch = sm.get_secret_value
+
+    def slow_fetch(SecretId):
+        time.sleep(0.05)  # keep the first fetch in flight while the other threads arrive
+        return fetch(SecretId)
+
+    sm.get_secret_value = slow_fetch
+    keys = []
+    threads = [
+        threading.Thread(target=lambda: keys.append(p.cookie_signing_key())) for _ in range(8)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert keys == [b"k" * 40] * 8
+    assert sm.calls.count("key-id") == 1
 
 
 def test_a_weak_signing_key_is_refused():
