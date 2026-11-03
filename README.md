@@ -9,7 +9,7 @@ Feature work builds on the [React/JSON contract](docs/frontend-contract.md).
 backend/    FastAPI app (app/), pytest tests, uv project (pyproject.toml + uv.lock)
 frontend/   Vite + React + TypeScript, Vitest tests, Playwright smoke checks (e2e/)
 Dockerfile  Multi-stage build, non-root runtime, same-origin serving
-docs/       frontend-contract.md
+docs/       frontend-contract.md, bedrock.md
 ```
 
 Requires [uv](https://docs.astral.sh/uv/) (it installs Python 3.13 itself) and Node 22+
@@ -68,5 +68,9 @@ group health check at `/api/health`.
 | `LOG_LEVEL` | no | Default `INFO`. JSON logs, metadata only. |
 | `STATIC_DIR` | no | Compiled assets; set to `/app/static` in the image. |
 | `ACCESS_CODE_HASH`, `COOKIE_SIGNING_KEY` | later | Secrets; supplied from Secrets Manager, never committed or built into assets. |
+
+Bedrock model selection and generation settings (`BEDROCK_*`) are documented, with
+precedence and examples, in [docs/bedrock.md](docs/bedrock.md). **No model is approved yet**:
+the Bedrock adapter in `backend/app/ai/` is blocked until one is verified there.
 
 The frontend has no environment configuration. See the contract for why.
