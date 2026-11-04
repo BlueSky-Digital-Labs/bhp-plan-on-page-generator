@@ -107,6 +107,8 @@ _AFFIRM = re.compile(
     r"^(yes|yep|yeah|correct|right|that'?s (right|all|it)|that is (right|all|it)|all good|"
     r"nothing else|no,? that'?s all|looks good|confirmed?)\b"
 )
+_KEEP_EARLIER = re.compile(r"\b(first|earlier|original|old|before|keep)\b")
+_TAKE_NEW = re.compile(r"\b(second|new|latest|now|latter|change)\b")
 _OVERRIDE = re.compile(
     r"\b(ignore (all |any |the |your |previous |the above )*(instructions|rules|prompt)|"
     r"disregard (your|the|all)|forget (your|all|the) (instructions|rules)|you are now|"
@@ -192,8 +194,7 @@ class Interviewer:
             s.confirmed.add(target.field)
             cue = ACK["captured"] if captured else ACK["confirmed"]
         elif target is not None and target.kind == "clarify" and target.field in s.conflicts:
-            self._resolve_conflict(s, target.field, user_text)
-            cue = ACK["captured"]
+            cue = self._resolve_conflict(s, target.field, user_text, stance)
         elif target is not None and stance in ("unsure", "declined", "affirm"):
             self._note_non_answer(s, target, stance)
             cue = ACK["declined"] if target.kind == "optional" else ACK["unsure"]
@@ -272,15 +273,37 @@ class Interviewer:
         return True
 
     @staticmethod
-    def _resolve_conflict(s: InterviewState, fld: str, text: str) -> None:
-        proposed = s.conflicts.pop(fld)
-        low = text.casefold()
-        if re.search(r"\b(first|earlier|original|old|before|keep)\b", low):
-            return  # the user kept what they said before
-        if re.search(r"\b(second|new|latest|now|latter|change)\b", low):
-            s.canvas[fld] = proposed
-            return
-        s.canvas[fld] = clean_value(fld, text) or s.canvas[fld]
+    def _resolve_conflict(s: InterviewState, fld: str, text: str, stance: Stance) -> str:
+        """Apply the user's choice between the earlier and the new answer; returns the cue.
+
+        Only a clear choice resolves it. Anything else leaves the conflict open so the same
+        question is asked again, and nothing the user said is overwritten. After two unclear
+        replies the earlier answer is kept (never replaced without clear consent), and the
+        user is told.
+        """
+        old, proposed = str(s.canvas.get(fld, "")), str(s.conflicts[fld])
+        low = text.casefold().strip()
+        keep = bool(_KEEP_EARLIER.search(low))
+        take = bool(_TAKE_NEW.search(low))
+        if low == old.casefold():
+            choice = "keep"
+        elif low == proposed.casefold():
+            choice = "take"
+        elif stance in ("unsure", "declined") or keep == take:  # no choice, or both at once
+            choice = None
+        else:
+            choice = "keep" if keep else "take"
+
+        if choice is None:
+            s.attempts[fld] = s.attempts.get(fld, 0) + 1
+            if s.attempts[fld] < 2:
+                return ACK["unclear"]
+            del s.conflicts[fld]
+            return ACK["kept_earlier"]
+        proposed_value = s.conflicts.pop(fld)
+        if choice == "take":
+            s.canvas[fld] = proposed_value
+        return ACK["captured"]
 
     @staticmethod
     def _confirm(s: InterviewState, fld: str, text: str, stance: Stance, override: bool) -> bool:

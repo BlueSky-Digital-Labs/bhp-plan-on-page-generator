@@ -256,6 +256,47 @@ def test_keeping_the_earlier_answer_resolves_a_contradiction_without_replacing_i
     assert convo.state.canvas["team"] == "Ops" and convo.state.conflicts == {}
 
 
+def _conflict_on_team():
+    convo = Conversation(
+        FakeExtractor(
+            Extraction([update("team", "Ops")]), Extraction([update("team", "Finance", "u2")])
+        )
+    )
+    convo.say("Ops owns it.")
+    convo.say("Maybe Finance.")
+    assert convo.state.conflicts == {"team": "Finance"}
+    return convo
+
+
+@pytest.mark.parametrize("answer", ["I'm not sure", "hmm let me think", "keep the new one"])
+def test_an_unclear_reply_leaves_the_conflict_open_and_asks_again(answer):
+    convo = _conflict_on_team()
+    convo.say(answer)
+    assert convo.state.canvas["team"] == "Ops"  # the confirmed answer is never overwritten
+    assert convo.state.conflicts == {"team": "Finance"}  # still unresolved
+    reply = convo.replies[-1]
+    assert "couldn't tell which" in reply and "Ops" in reply and "Finance" in reply
+    assert "noted that" not in reply  # the user is not told it was captured
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [("Finance", "Finance"), ("ops", "Ops"), ("Use the new one.", "Finance")],
+)
+def test_naming_one_of_the_values_resolves_the_conflict(answer, expected):
+    convo = _conflict_on_team()
+    convo.say(answer)
+    assert convo.state.canvas["team"] == expected and convo.state.conflicts == {}
+
+
+def test_two_unclear_replies_keep_the_earlier_answer_and_say_so():
+    convo = _conflict_on_team()
+    convo.say("I'm not sure")
+    convo.say("no idea")
+    assert convo.state.canvas["team"] == "Ops" and convo.state.conflicts == {}
+    assert "kept what you said first" in convo.replies[-1]
+
+
 def test_unsure_about_a_required_field_is_recorded_but_never_satisfies_the_validator():
     convo = Conversation()
     convo.say(OPENING)

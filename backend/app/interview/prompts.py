@@ -39,6 +39,8 @@ ACK = {
     "nothing": "I couldn't use that for the canvas.",
     "override": "I can only help with completing the canvas.",
     "conflict": "That's different from what you said earlier.",
+    "unclear": "Sorry, I couldn't tell which one you meant.",
+    "kept_earlier": "I still couldn't tell which you meant, so I've kept what you said first.",
     "confirmed": "Thanks, that's confirmed.",
 }
 READY_TEXT = "Thanks, that covers everything the canvas needs. You can review it next."
