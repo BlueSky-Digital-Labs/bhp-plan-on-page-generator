@@ -28,6 +28,18 @@ def _empty_canvas_view() -> dict[str, Any]:
     return {"fields": {}, "missing_required": list(REQUIRED_ORDER), "ready_for_review": False}
 
 
+def _empty_progression_view() -> dict[str, Any]:
+    return {
+        "phase": "interview",
+        "outstanding_question": None,
+        "clarification": {"active": False, "reason": None},
+        "validation": {"missing_required": list(REQUIRED_ORDER), "unsure": []},
+        "data_and_systems_complete": False,
+        "optional_prompted": [],
+        "optional_declined": [],
+    }
+
+
 def turn_json(turn: Turn) -> dict[str, str]:
     return {"turn_id": turn.turn_id, "role": turn.role, "text": turn.text, "status": turn.status}
 
@@ -51,7 +63,17 @@ class ConversationService:
             if self._interview is not None
             else _empty_canvas_view()
         )
-        return {"revision": revision, "turns": [turn_json(t) for t in turns], "canvas": canvas}
+        progression = (
+            self._interview.progression_view(session.session_id)
+            if self._interview is not None
+            else _empty_progression_view()
+        )
+        return {
+            "revision": revision,
+            "turns": [turn_json(t) for t in turns],
+            "canvas": canvas,
+            "progression": progression,
+        }
 
     def submit(
         self, session: Session, submission_id: str, text: str, expected_revision: int

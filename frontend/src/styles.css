@@ -223,7 +223,8 @@ body:has(.entry) { background: radial-gradient(60rem 28rem at 50% 3rem, #fdf1ea 
   background: var(--chat-bg); border: 1px solid var(--border); border-radius: 1rem;
   box-shadow: 0 1px 2px rgba(20, 24, 40, 0.06), 0 8px 28px rgba(20, 24, 40, 0.1); overflow: hidden;
 }
-.chat__header { display: flex; justify-content: flex-start; padding: 0.7rem 1.1rem; background: #fff; border-bottom: 1px solid var(--border); }
+.chat__phase { margin-left: auto; padding: 0.15rem 0.7rem; border-radius: 999px; background: #fbeee8; color: #8a3414; font-size: 0.8rem; font-weight: 700; }
+.chat__header { display: flex; justify-content: flex-start; align-items: center; padding: 0.7rem 1.1rem; background: #fff; border-bottom: 1px solid var(--border); }
 .chat__pill { display: inline-flex; align-items: center; gap: 0.6rem; font-weight: 700; font-size: 0.95rem; color: var(--fg); }
 .chat__online { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: #2e9b57; box-shadow: 0 0 0 2px #fff; }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type Conversation,
+  type Phase,
   type Turn,
   getConversation,
   streamReply,
@@ -25,6 +26,14 @@ const UNSURE_SAVED =
 
 // crypto.randomUUID exists in the secure contexts this app runs in (HTTPS, localhost).
 const newSubmissionId = (): string => crypto.randomUUID();
+
+// Fixed copy keyed on the server's phase: nothing from the response is rendered as text here.
+const PHASE_LABELS: Record<Phase, string | null> = {
+  interview: null,
+  clarification: "Clarifying a detail",
+  data_and_systems: "Checking data and systems",
+  review_ready: "Ready to review",
+};
 
 // What the stored history says about the last assistant turn.
 function unfinishedTurn(history: Conversation | null): Turn | null {
@@ -245,6 +254,11 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
               AI assistant
               <span className="chat__online" aria-hidden="true" />
             </span>
+            {PHASE_LABELS[history?.progression?.phase ?? "interview"] && (
+              <span className="chat__phase" data-testid="interview-phase">
+                {PHASE_LABELS[history?.progression?.phase ?? "interview"]}
+              </span>
+            )}
           </header>
 
           <div className="chat__messages" ref={scrollRef} onScroll={onScroll}>

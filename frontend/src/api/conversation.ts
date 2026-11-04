@@ -14,11 +14,18 @@ export interface CanvasView {
   ready_for_review: boolean;
 }
 
+// Where the guided interview is. Computed by the server; the page only shows it.
+export type Phase = "interview" | "clarification" | "data_and_systems" | "review_ready";
+export interface Progression {
+  phase: Phase;
+}
+
 // The stored history is the source of truth. `revision` is the version the next answer builds on.
 export interface Conversation {
   revision: number;
   turns: Turn[];
   canvas?: CanvasView;
+  progression?: Progression;
 }
 
 export interface Submission {

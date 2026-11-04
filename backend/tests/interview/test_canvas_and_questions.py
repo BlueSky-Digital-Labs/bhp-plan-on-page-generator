@@ -12,6 +12,7 @@ from app.interview.prompts import (
     CONFLICT,
     PROMPT_VERSION,
     QUESTIONS,
+    TIPS,
     render_question,
     validate_question,
 )
@@ -125,6 +126,23 @@ def test_compound_or_off_target_questions_are_rejected(field, text):
     assert not validate_question(text, field)
 
 
-def test_the_six_opportunity_names_are_not_mistaken_for_other_topics():
-    ask = QUESTIONS["opportunityTypes"][0]
-    assert "Analyse Data" in ask and validate_question(ask, "opportunityTypes")
+def test_the_opportunity_question_lists_every_option_so_the_user_can_see_what_to_choose_from():
+    ask, follow_up = QUESTIONS["opportunityTypes"]
+    for text in (ask, follow_up):
+        assert all(name in text for name in OPPORTUNITY_TYPES), text
+        assert validate_question(text, "opportunityTypes")
+    assert "more than one" in TIPS["opportunityTypes"]  # said right after the first ask
+
+
+def test_a_follow_up_shows_how_to_answer_with_an_example():
+    for field, (ask, follow_up) in QUESTIONS.items():
+        if field in ("priority", "businessImpact", "kpis"):  # choices and optional prompts
+            continue
+        assert "like “" in follow_up, field  # a concrete way to answer
+        assert "like “" not in ask, field  # the first ask stays direct
+
+
+def test_the_priority_follow_up_asks_why_in_one_question():
+    question = render_question("probe", "priority", {"priority": "High"}, attempts=0)
+    assert question == "Why does this deserve High priority?"
+    assert validate_question(question, "priority")

@@ -95,3 +95,11 @@ ANSWERS = {
     "priority": "High",
 }
 OPENING = "We copy shift notes between three spreadsheets and it takes hours."
+
+
+def reply_to(target, default="Yes, that's all.") -> str:
+    """A synthetic reply to whatever the interviewer is asking. The priority follow-up is declined
+    here so tests that are about something else stay focused."""
+    if target.kind == "probe":
+        return "skip"
+    return ANSWERS.get(target.field, default)

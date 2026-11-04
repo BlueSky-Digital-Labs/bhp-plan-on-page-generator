@@ -2,7 +2,7 @@ import copy
 import threading
 from datetime import datetime
 
-from app.interview.engine import InterviewState, canvas_view
+from app.interview.engine import InterviewState, canvas_view, progression_view
 
 
 class InMemoryInterviewStore:
@@ -27,6 +27,9 @@ class InMemoryInterviewStore:
 
     def canvas_view(self, session_id: str) -> dict:
         return canvas_view(self.get(session_id))
+
+    def progression_view(self, session_id: str) -> dict:
+        return progression_view(self.get(session_id))
 
     def delete_session(self, session_id: str) -> None:
         with self._lock:

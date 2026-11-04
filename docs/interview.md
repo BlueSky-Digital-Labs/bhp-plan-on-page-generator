@@ -3,8 +3,9 @@
 Turns what a user says into canvas fields and asks for what is missing, **one question per
 turn**. Code: `backend/app/interview/`. It plugs into the conversation stream
 ([conversation.md](conversation.md)) and adds no new endpoint: `GET /api/conversation` now also
-returns the draft as `canvas: {fields, missing_required, ready_for_review}`, and the
-conversation screen shows it beside the transcript.
+returns the draft as `canvas: {fields, missing_required, ready_for_review}` and the interview's
+position as `progression` (below), and the conversation screen shows the draft beside the
+transcript.
 
 ## How a turn works
 
@@ -19,6 +20,31 @@ conversation screen shows it beside the transcript.
 
 The model never decides completeness, the next target, priority, or what the user sees if its
 wording is invalid.
+
+## Progression (server-owned)
+
+`GET /api/conversation` returns, beside `canvas`:
+
+```json
+"progression": {
+  "phase": "interview | clarification | data_and_systems | review_ready",
+  "outstanding_question": {"target": "painPoints", "kind": "missing", "text": "…"} | null,
+  "clarification": {"active": false, "reason": "conflict | unsure | unclear | null"},
+  "validation": {"missing_required": ["…"], "unsure": ["…"]},
+  "data_and_systems_complete": false,
+  "optional_prompted": ["businessImpact"],
+  "optional_declined": []
+}
+```
+
+It is computed from the stored interview state, so it survives a refresh and agrees with the
+last assistant turn (that turn ends with `outstanding_question.text`). The outstanding question's
+target is stored with the draft, so a failed turn, a retry or a reload asks for the same thing.
+`data_and_systems_complete` is set only by the two dedicated confirmation turns, never by the
+data or systems being mentioned in passing, so an initial description cannot skip that pass.
+`review_ready` and `ready_for_review` are both computed by the server; the browser sends only
+the answer text. The conversation screen shows the phase as a small label (fixed copy keyed on
+the enum).
 
 ## Rules the engine enforces (each has a test)
 
@@ -43,22 +69,38 @@ wording is invalid.
 * Questions are checked (`validate_question`) for exactly one `?`, no list markers, no joined
   requests, no second question word, the selected target's topic, and no other topic's strong
   keywords. A model-written question that fails is never shown; the reviewed template is used.
+* **Questions are direct and about one field, in a colleague's voice** ("What makes the way it
+  works today painful or frustrating?"), with a short tip after some first asks ("A rough working
+  title is fine."). When an answer cannot be used, the follow-up shows how to answer with an
+  example, then asks again ("Tell me the biggest headache, like “it takes two hours and details
+  get lost”. What problem hurts most?").
+* **Acknowledgements vary** ("Got it.", "That makes sense.", "Good to know.") and are picked from
+  the turn number, so the same state always gives the same reply. The rule redirect and the
+  contradiction question keep their exact wording.
+* **Opportunity type lists every option** (Find Information, Generate Reports, Predict Issues,
+  Recommend Actions, Analyse Data, Automate Workflows) and says more than one is fine. A plain
+  answer such as "write the handover report" is mapped to the matching option when it clearly fits.
+* **Priority gets one follow-up**: after the user chooses it, "Why does this deserve High
+  priority? A sentence or two is plenty." The reason is the business case, so it is kept in Business Impact (joined to
+  anything already there). Skipping it never blocks anything, and an answered Business Impact is
+  not asked again later.
 
-## Prompts and questions (version `2026-11-03.1`)
+## Prompts and questions (version `2026-11-04.3`)
 
-`prompts.py` holds the system prompt, an ask and a follow-up for every field, the dedicated
-confirmations and the acknowledgements. Representative examples (plain language, no canvas
+`prompts.py` holds the extractor prompt, an ask and a follow-up for every field, the priority
+follow-up, the dedicated confirmations and the acknowledgements. Representative examples (plain language, no canvas
 labels needed):
 
-| Target | First ask | Follow-up if unclear |
+| Target | First ask | Follow-up if the answer could not be used |
 | --- | --- | --- |
-| Solution Name | What would you like to call this solution? | A short working title is enough. What would you call this solution? |
-| Current Process | How is this work done today, step by step in your own words? | Briefly, what do people actually do today to get this done? |
-| Pain Points | What are the main problems or frustrations with the way it works today? | What is the single biggest problem with the current way of working? |
-| Opportunity type | Which of these fits best: Find Information, … or Automate Workflows? | Please pick one or more of these: … Which ones fit? |
-| Data (confirmation) | Is there other data it would need, besides “…”? | |
-| Priority | Which priority would you give this idea: Low, Medium, High or Strategic? | The priority is your choice. Which one fits: Low, Medium, High or Strategic? |
-| Business Impact (optional) | What difference would this make to the business, if you can say? | You can say you don't know. Roughly, what would improve for the business? |
+| Solution Name | What would you like to call this idea? (A rough working title is fine.) | A short name like “Shift Notes Assistant” works. What would you call it? |
+| Current Process | Could you walk me through how this work gets done today? | Think of the steps from start to finish, like “copy the notes into a spreadsheet, then email a summary”. How is it done today? |
+| Pain Points | What makes the way it works today painful or frustrating? | Tell me the biggest headache, like “it takes two hours and details get lost”. What problem hurts most? |
+| Opportunity type | What kind of help do you want from AI: Find Information, …, or Automate Workflows? (You can pick more than one.) | Pick whichever fits best, like “Find Information and Generate Reports”. Which of these fit: …? |
+| Data (confirmation) | I have “…” down as the data so far. Is there any other data it would need? | |
+| Priority | What priority would you give this idea: Low, Medium, High or Strategic? | It's your call. Which priority fits: Low, Medium, High or Strategic? |
+| Priority (follow-up) | Why does this deserve High priority? (A sentence or two is plenty.) | |
+| Business Impact (optional) | What difference would this make for the business, if you can say? | It's fine to say you don't know. Roughly, what would improve for the business? |
 
 Changing any wording means bumping `PROMPT_VERSION`; the tests check that every template passes
 the one-question checker. The templates hold only instructions and synthetic examples.
@@ -100,11 +142,6 @@ screen with the scripted `test` producer; the guided interview itself needs the 
 
 ## Not done in this version
 
-* **Model-repair loop**: an invalid model-written question goes straight to the reviewed
-  template (zero repair attempts).
-* **Model-written questions** are accepted only if they validate against the server-chosen
-  target; since the model does not know that target when extracting, templates are used almost
-  always.
 * **Unsupported-claim detection for free text** is limited to source-turn citation and the
   field/value rules; a model paraphrase is not compared against the user's words.
 * **Real-model checks**: the model path has not run live: no Bedrock smoke test, no review round of generated questions,

@@ -22,14 +22,16 @@ from app.interview.canvas import (
     missing_required,
 )
 from app.interview.prompts import (
-    ACK,
     READY_TEXT,
+    TIPS,
+    acknowledgement,
     render_question,
     validate_question,
 )
 
-Kind = Literal["missing", "clarify", "confirm", "optional"]
+Kind = Literal["missing", "clarify", "confirm", "optional", "probe"]
 Stance = Literal["answered", "unsure", "declined", "affirm"]
+Phase = Literal["interview", "clarification", "data_and_systems", "review_ready"]
 
 
 @dataclass(frozen=True)
@@ -47,9 +49,11 @@ class InterviewState:
     prompted: set[str] = field(default_factory=set)  # optional fields whose question was shown
     declined: set[str] = field(default_factory=set)  # optional fields the user declined/skipped
     confirmed: set[str] = field(default_factory=set)  # data / systems confirmation turns done
+    probed: set[str] = field(default_factory=set)  # answers followed up once ("why is it High?")
     unknown: set[str] = field(default_factory=set)  # required fields the user said they don't know
     attempts: dict[str, int] = field(default_factory=dict)
     conflicts: dict[str, Any] = field(default_factory=dict)  # field -> new value awaiting a choice
+    question: str | None = None  # the outstanding question as shown (without the acknowledgement)
 
 
 @dataclass
@@ -143,11 +147,13 @@ def choose_target(s: InterviewState) -> Target | None:
         # A required field the user could not answer is revisited later, never dropped.
         pick = next((f for f in missing if s.attempts.get(f, 0) < 2), missing[0])
         return Target("clarify" if s.attempts.get(pick, 0) else "missing", pick)
+    if "priority" not in s.probed:  # one follow-up on the priority the user chose
+        return Target("probe", "priority")
     for f in ("data", "systems"):  # dedicated passes, one per turn, even if already mentioned
         if f not in s.confirmed:
             return Target("confirm", f)
     for f in OPTIONAL_FIELDS:  # prompted separately; declining never blocks
-        if f not in s.prompted:
+        if f not in s.prompted and not s.canvas.get(f):  # an answered field is not asked again
             return Target("optional", f)
     return None
 
@@ -172,6 +178,43 @@ def canvas_view(s: InterviewState) -> dict[str, Any]:
     }
 
 
+def progression_view(s: InterviewState) -> dict[str, Any]:
+    """Where the interview is, computed on the server and only ever shown by the browser."""
+    t = s.target
+    if is_ready(s):
+        phase: Phase = "review_ready"
+    elif t is not None and t.kind == "clarify":
+        phase = "clarification"
+    elif t is not None and t.kind == "confirm":
+        phase = "data_and_systems"
+    else:
+        phase = "interview"
+    reason = None
+    if phase == "clarification" and t is not None:
+        reason = (
+            "conflict"
+            if t.field in s.conflicts
+            else "unsure"
+            if t.field in s.unknown
+            else "unclear"
+        )
+    return {
+        "phase": phase,
+        "outstanding_question": (
+            {"target": t.field, "kind": t.kind, "text": s.question}
+            if t is not None and s.question
+            else None
+        ),
+        "clarification": {"active": phase == "clarification", "reason": reason},
+        "validation": {"missing_required": missing_required(s.canvas), "unsure": sorted(s.unknown)},
+        # The dedicated pass is tracked on its own: answering data/systems in passing never counts.
+        "data_and_systems_complete": {"data", "systems"} <= s.confirmed,
+        "priority_follow_up_asked": "priority" in s.probed,
+        "optional_prompted": sorted(s.prompted),
+        "optional_declined": sorted(s.declined),
+    }
+
+
 class Interviewer:
     def __init__(self, extractor: Extractor) -> None:
         self._extractor = extractor
@@ -187,38 +230,39 @@ class Interviewer:
         target = s.target
         stance = detect_stance(user_text, target)
         override = looks_like_override(user_text)
-        cue: str | None = None
+        cue: str | None = None  # a key of ACK: what happened with this answer
 
         if target is not None and target.kind == "confirm":
             captured = self._confirm(s, target.field, user_text, stance, override)
             s.confirmed.add(target.field)
-            cue = ACK["captured"] if captured else ACK["confirmed"]
+            cue = "captured" if captured else "confirmed"
+        elif target is not None and target.kind == "probe":
+            cue = "captured" if self._probe(s, user_text, stance, override) else "declined"
         elif target is not None and target.kind == "clarify" and target.field in s.conflicts:
             cue = self._resolve_conflict(s, target.field, user_text, stance)
         elif target is not None and stance in ("unsure", "declined", "affirm"):
             self._note_non_answer(s, target, stance)
-            cue = ACK["declined"] if target.kind == "optional" else ACK["unsure"]
+            cue = "declined" if target.kind == "optional" else "unsure"
         else:
             extraction = self._extractor.extract(
                 ExtractionInput(user_text, user_turn_id, user_turn_ids, target, s.canvas, override)
             )
             captured = self._apply(s, extraction, target, user_text, user_turn_ids)
             if override:
-                cue = ACK["override"]
+                cue = "override"
             elif s.conflicts:
-                cue = ACK["conflict"]
+                cue = "conflict"
             elif captured:
-                cue = ACK["captured"]
+                cue = "captured"
             else:  # nothing usable was captured
                 if target is not None and target.kind == "optional":
                     s.declined.add(target.field)  # an optional answer we cannot use never blocks
                 elif target is not None:
                     s.attempts[target.field] = s.attempts.get(target.field, 0) + 1
-                cue = ACK["nothing"]
-            extraction_question = extraction.next_question
-            return self._finish(s, cue, extraction_question)
+                cue = "nothing"
+            return self._finish(s, cue, extraction.next_question, len(user_turn_ids))
 
-        return self._finish(s, cue, None)
+        return self._finish(s, cue, None, len(user_turn_ids))
 
     # -- applying proposals ---------------------------------------------------------------------
     def _apply(
@@ -274,7 +318,7 @@ class Interviewer:
 
     @staticmethod
     def _resolve_conflict(s: InterviewState, fld: str, text: str, stance: Stance) -> str:
-        """Apply the user's choice between the earlier and the new answer; returns the cue.
+        """Apply the user's choice between the earlier and the new answer; returns the cue key.
 
         Only a clear choice resolves it. Anything else leaves the conflict open so the same
         question is asked again, and nothing the user said is overwritten. After two unclear
@@ -297,13 +341,13 @@ class Interviewer:
         if choice is None:
             s.attempts[fld] = s.attempts.get(fld, 0) + 1
             if s.attempts[fld] < 2:
-                return ACK["unclear"]
+                return "unclear"
             del s.conflicts[fld]
-            return ACK["kept_earlier"]
+            return "kept_earlier"
         proposed_value = s.conflicts.pop(fld)
         if choice == "take":
             s.canvas[fld] = proposed_value
-        return ACK["captured"]
+        return "captured"
 
     @staticmethod
     def _confirm(s: InterviewState, fld: str, text: str, stance: Stance, override: bool) -> bool:
@@ -316,6 +360,19 @@ class Interviewer:
         return True
 
     @staticmethod
+    def _probe(s: InterviewState, text: str, stance: Stance, override: bool) -> bool:
+        """The reason behind the chosen priority is the business case, so it goes in Business
+        Impact (joined to anything already there). Skipping it never blocks anything."""
+        if stance != "answered" or override:
+            return False
+        existing = s.canvas.get("businessImpact")
+        joined = clean_value("businessImpact", f"{existing}; {text}" if existing else text)
+        if joined is None:
+            return False
+        s.canvas["businessImpact"] = joined
+        return True
+
+    @staticmethod
     def _note_non_answer(s: InterviewState, target: Target, stance: Stance) -> None:
         if target.kind == "optional":
             s.declined.add(target.field)
@@ -324,13 +381,18 @@ class Interviewer:
             s.attempts[target.field] = s.attempts.get(target.field, 0) + 1
 
     # -- composing the reply --------------------------------------------------------------------
-    def _finish(self, s: InterviewState, cue: str | None, model_question: str | None) -> Outcome:
+    def _finish(
+        self, s: InterviewState, cue: str | None, model_question: str | None, turn_number: int
+    ) -> Outcome:
         nxt = choose_target(s)
         s.target = nxt
         if nxt is None:
+            s.question = None
             return Outcome(READY_TEXT, s, "ready_for_review")
         if nxt.kind == "optional":
             s.prompted.add(nxt.field)  # recorded only when this turn is committed (i.e. shown)
+        if nxt.kind == "probe":
+            s.probed.add(nxt.field)
         question = render_question(
             nxt.kind,
             nxt.field,
@@ -341,7 +403,11 @@ class Interviewer:
         if model_question and nxt.kind in ("missing", "clarify", "optional") and not s.conflicts:
             if validate_question(model_question, nxt.field):
                 question = model_question.strip()  # a valid model question; otherwise the template
-        text = f"{cue} {question}" if cue else question
+        s.question = question
+        first_ask = nxt.kind in ("missing", "optional", "probe") and not s.attempts.get(nxt.field)
+        tip = TIPS.get("probe" if nxt.kind == "probe" else nxt.field) if first_ask else None
+        parts = [acknowledgement(cue, turn_number) if cue else None, question, tip]
+        text = " ".join(p for p in parts if p)
         return Outcome(text, s, "clarify" if nxt.kind == "clarify" else "ask")
 
 
@@ -353,6 +419,7 @@ __all__ = [
     "FieldUpdate",
     "InterviewState",
     "Interviewer",
+    "Phase",
     "OPPORTUNITY_TYPES",
     "Outcome",
     "Target",
@@ -361,4 +428,5 @@ __all__ = [
     "detect_stance",
     "is_ready",
     "looks_like_override",
+    "progression_view",
 ]
