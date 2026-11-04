@@ -1,3 +1,4 @@
+import logging
 import time
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
@@ -7,6 +8,7 @@ from app.interview.engine import Interviewer, Outcome
 from app.interview.store import InMemoryInterviewStore
 
 _MAX_IN_FLIGHT = 1000
+logger = logging.getLogger("app.interview")
 
 
 def _utcnow() -> datetime:
@@ -41,8 +43,11 @@ class InterviewerProducer:
         outcome = self._interviewer.process(
             state, ctx.user_text, ctx.user_turn_id, ctx.user_turn_ids
         )
-        if len(self._outcomes) >= _MAX_IN_FLIGHT:  # abandoned streams cannot pile up
-            self._outcomes.clear()
+        # Abandoned streams cannot pile up: drop only the oldest (insertion order), never the
+        # streams that are still live. Losing one is logged, not silent.
+        while len(self._outcomes) >= _MAX_IN_FLIGHT:
+            del self._outcomes[next(iter(self._outcomes))]
+            logger.warning("outcome_evicted", extra={"reason": "too_many_in_flight"})
         self._outcomes[ctx.turn_id] = outcome
         for i, word in enumerate(outcome.text.split(" ")):
             if self._delay:
@@ -51,5 +56,7 @@ class InterviewerProducer:
 
     def commit(self, ctx: TurnContext) -> None:
         outcome = self._outcomes.pop(ctx.turn_id, None)
-        if outcome is not None:
-            self._store.put(ctx.session_id, outcome.state, ctx.session_expires_at, self._clock())
+        if outcome is None:
+            logger.warning("outcome_missing", extra={"reason": "not_in_flight"})
+            return
+        self._store.put(ctx.session_id, outcome.state, ctx.session_expires_at, self._clock())

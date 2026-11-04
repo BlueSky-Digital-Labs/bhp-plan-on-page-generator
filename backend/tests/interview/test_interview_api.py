@@ -221,3 +221,46 @@ def test_a_failed_turn_is_logged_with_a_safe_code_and_detail_but_no_content(worl
     assert failed.failure_code == "invalid_tool_input"
     assert failed.detail == "schema_violation; action:literal_error"
     assert secret not in repr(failed.__dict__)
+
+
+def _ctx(n: int, expires):
+    from app.conversation.producers import TurnContext
+
+    return TurnContext(
+        session_id=f"s{n}",
+        turn_id=f"t{n}",
+        user_turn_id=f"u{n}",
+        user_text=OPENING,
+        user_turn_ids=(f"u{n}",),
+        session_expires_at=expires,
+    )
+
+
+def test_hitting_the_in_flight_limit_drops_only_the_oldest_stream_never_the_live_ones(
+    monkeypatch, world
+):
+    import app.interview.producer as module
+
+    monkeypatch.setattr(module, "_MAX_IN_FLIGHT", 3)
+    interview = InMemoryInterviewStore()
+    producer = InterviewerProducer(Interviewer(AnswerFiler()), interview, clock=world.clock)
+    expires = world.clock() + __import__("datetime").timedelta(hours=1)
+    contexts = [_ctx(n, expires) for n in range(4)]
+    for ctx in contexts:
+        list(producer.stream(ctx))  # four streams opened with room for three: the oldest goes
+
+    for ctx in contexts[1:]:  # the three newest are still live and commit normally
+        producer.commit(ctx)
+        assert interview.get(ctx.session_id).canvas == {"achieve": OPENING}
+    producer.commit(contexts[0])  # the evicted one is skipped, without raising
+    assert interview.get("s0").canvas == {}
+
+
+def test_an_evicted_or_unknown_commit_is_logged_without_content(world, caplog):
+    producer = InterviewerProducer(
+        Interviewer(AnswerFiler()), InMemoryInterviewStore(), clock=world.clock
+    )
+    with caplog.at_level("WARNING", logger="app.interview"):
+        producer.commit(_ctx(9, world.clock()))
+    assert [r.getMessage() for r in caplog.records] == ["outcome_missing"]
+    assert OPENING not in caplog.text
