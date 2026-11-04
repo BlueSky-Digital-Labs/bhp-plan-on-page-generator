@@ -1,5 +1,7 @@
 """Provider-agnostic Bedrock ConverseStream integration. See docs/bedrock.md."""
 
+import os
+
 from app.ai.adapter import ConverseStreamAdapter, InvalidRequestError
 from app.ai.client import build_bedrock_runtime_client
 from app.ai.config import (
@@ -8,7 +10,12 @@ from app.ai.config import (
     InferenceConfig,
     load_bedrock_config,
 )
-from app.ai.policy import ValidatedBedrockConfig, validate_bedrock_config
+from app.ai.policy import (
+    APPROVED_SELECTIONS,
+    ValidatedBedrockConfig,
+    load_local_approvals,
+    validate_bedrock_config,
+)
 from app.ai.types import (
     CompletionStatus,
     ConverseRequest,
@@ -19,6 +26,7 @@ from app.ai.types import (
     ToolInputRejected,
     TurnResult,
 )
+from app.config import AppEnv
 
 
 def get_validated_bedrock_config() -> ValidatedBedrockConfig:
@@ -28,7 +36,12 @@ def get_validated_bedrock_config() -> ValidatedBedrockConfig:
     features that use Bedrock, not at application startup, so the foundation app still
     runs before a model has been approved.
     """
-    return validate_bedrock_config(load_bedrock_config())
+    try:
+        app_env: AppEnv | None = AppEnv(os.environ.get("APP_ENV", ""))
+    except ValueError:
+        app_env = None  # unset or unknown: no local approvals, fail closed
+    registry = (*APPROVED_SELECTIONS, *load_local_approvals(app_env))
+    return validate_bedrock_config(load_bedrock_config(), registry)
 
 
 __all__ = [
