@@ -55,3 +55,20 @@ def test_deployed_requires_access_control_identifiers(monkeypatch, static_dir):
     assert "access_code_hash_secret_id" in str(excinfo.value)
     assert "cookie_signing_key_secret_id" in str(excinfo.value)
     assert "sessions_table_name" not in str(excinfo.value)
+
+
+def test_the_scripted_test_producer_is_refused_when_deployed(monkeypatch, static_dir):
+    monkeypatch.setenv("APP_ENV", "deployed")
+    monkeypatch.setenv("STATIC_DIR", str(static_dir))
+    monkeypatch.setenv("SESSIONS_TABLE_NAME", "sessions")
+    monkeypatch.setenv("ACCESS_CODE_HASH_SECRET_ID", "access-hash")
+    monkeypatch.setenv("COOKIE_SIGNING_KEY_SECRET_ID", "cookie-key")
+    monkeypatch.setenv("CONVERSATION_PRODUCER", "test")
+    with pytest.raises(ConfigError, match="conversation_producer"):
+        get_settings()
+
+
+def test_the_producer_defaults_to_unavailable_so_nothing_is_fabricated(static_dir):
+    assert (
+        Settings(app_env=AppEnv.LOCAL, static_dir=static_dir).conversation_producer == "unavailable"
+    )

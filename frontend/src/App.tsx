@@ -1,7 +1,9 @@
-import { useEffect } from "react";
+import { type ReactNode, useEffect } from "react";
 import { getServiceStatus } from "./api/endpoints";
 import { AccessGate } from "./components/AccessGate";
 import { CanvasForm } from "./components/CanvasForm";
+import { ConversationScreen } from "./components/ConversationScreen";
+import { ReviewScreen } from "./components/ReviewScreen";
 import { ErrorNotice } from "./components/ErrorNotice";
 import { Layout } from "./components/Layout";
 import { Loading } from "./components/Loading";
@@ -11,7 +13,7 @@ import { useAccessState } from "./hooks/useAccessState";
 import { useRequest } from "./hooks/useRequest";
 import { ROUTES, navigate, readNotice, safeRoute, usePath } from "./router";
 
-function Workspace({ expiresAt, onSignOut }: { expiresAt: string; onSignOut: () => void }) {
+function CanvasWorkspace() {
   const { state, run } = useRequest(getServiceStatus);
 
   useEffect(() => {
@@ -20,14 +22,6 @@ function Workspace({ expiresAt, onSignOut }: { expiresAt: string; onSignOut: () 
 
   return (
     <>
-      <div className="session-bar">
-        <span>
-          Private session, ends {new Date(expiresAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}
-        </span>
-        <button type="button" className="button--secondary" onClick={onSignOut}>
-          Sign out
-        </button>
-      </div>
       <h1>Plan on a Page</h1>
       <p>Complete the AI Opportunity Canvas. Fields marked * are required.</p>
 
@@ -58,20 +52,25 @@ function Redirect({ to, notice }: { to: string; notice?: "access_required" }) {
 // "/": the access-code form. A browser that already has access skips straight to /start.
 function EntryRoute() {
   const { state, recheck } = useAccessState();
-  if (state.phase === "checking") return <Loading label="Checking access…" />;
-  if (state.phase === "error") return <ErrorNotice error={state.error} onRetry={recheck} />;
-  if (state.permitted) return <Redirect to={ROUTES.start} />;
-  return (
-    <>
-      <h1>Plan on a Page</h1>
-      {readNotice() === "access_required" && (
-        <p role="status" className="notice">
-          Your access has expired or has not been entered. Enter the access code to continue.
-        </p>
-      )}
-      <AccessGate onAccepted={() => navigate(ROUTES.start)} />
-    </>
-  );
+  let content;
+  if (state.phase === "checking") content = <Loading label="Checking access…" />;
+  else if (state.phase === "error") content = <ErrorNotice error={state.error} onRetry={recheck} />;
+  else if (state.permitted) content = <Redirect to={ROUTES.start} />;
+  else {
+    content = (
+      <>
+        <h1>Plan on a Page</h1>
+        {readNotice() === "access_required" && (
+          <p role="status" className="notice">
+            Your access has expired or has not been entered. Enter the access code to continue.
+          </p>
+        )}
+        <AccessGate onAccepted={() => navigate(ROUTES.start)} />
+      </>
+    );
+  }
+  // Every state sits in the same centred container, so the page does not jump when it loads.
+  return <div className="entry">{content}</div>;
 }
 
 // "/start": protected. Nothing but a loading state shows until the backend has answered.
@@ -88,19 +87,50 @@ function StartRoute() {
   );
 }
 
-// "/conversation": the route the conversation feature will fill. Until then it shows the
-// canvas workspace, and it requires a real session, checked by the backend.
-function ConversationRoute() {
+// Pages that need a real session, checked by the backend before anything is shown. Losing the
+// session (expired, ended, deleted) returns to entry with neutral guidance and drops the page.
+function SessionPage({ children }: { children: (onAccessLost: () => void) => ReactNode }) {
   const { state, check, signOut } = useAccess();
+  const lost = () => navigate(ROUTES.entry, { replace: true, notice: "access_required" });
   if (state.phase === "checking") return <Loading label="Checking access…" />;
   if (state.phase === "error") return <ErrorNotice error={state.error} onRetry={check} />;
   if (state.phase === "signed_out") return <Redirect to={ROUTES.entry} notice="access_required" />;
   return (
-    <Workspace
-      expiresAt={state.session.expires_at}
-      onSignOut={() => void signOut().then(() => navigate(ROUTES.entry, { replace: true }))}
-    />
+    <>
+      <div className="session-bar">
+        <span>
+          Private session, ends{" "}
+          {new Date(state.session.expires_at).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}
+        </span>
+        <button
+          type="button"
+          className="button--secondary"
+          onClick={() => void signOut().then(() => navigate(ROUTES.entry, { replace: true }))}
+        >
+          Sign out
+        </button>
+      </div>
+      {children(lost)}
+    </>
   );
+}
+
+// "/conversation": describe the idea and follow the conversation. History comes from the server.
+function ConversationRoute() {
+  return <SessionPage>{(lost) => <ConversationScreen onAccessLost={lost} />}</SessionPage>;
+}
+
+// "/review": the finished canvas as a one-pager, shown only once the server says it is ready.
+function ReviewRoute() {
+  return (
+    <SessionPage>
+      {(lost) => <ReviewScreen onBack={() => navigate(ROUTES.conversation)} onAccessLost={lost} />}
+    </SessionPage>
+  );
+}
+
+function CanvasRoute() {
+  return <SessionPage>{() => <CanvasWorkspace />}</SessionPage>;
 }
 
 export function App() {
@@ -110,9 +140,9 @@ export function App() {
       {path === ROUTES.entry && <EntryRoute />}
       {path === ROUTES.start && <StartRoute />}
       {path === ROUTES.conversation && <ConversationRoute />}
-      {![ROUTES.entry, ROUTES.start, ROUTES.conversation].includes(path as never) && (
-        <Redirect to={ROUTES.entry} />
-      )}
+      {path === ROUTES.review && <ReviewRoute />}
+      {path === ROUTES.canvas && <CanvasRoute />}
+      {!Object.values<string>(ROUTES).includes(path) && <Redirect to={ROUTES.entry} />}
     </Layout>
   );
 }

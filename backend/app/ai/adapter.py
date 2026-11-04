@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Iterator, Sequence
 from typing import Any
@@ -59,6 +60,30 @@ _INCOMPLETE_REASONS = {
 
 class InvalidRequestError(ValueError):
     """The request cannot be honoured by the configured model. Safe to log: no content."""
+
+
+_IDENT = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+_PATH_PART = re.compile(r"^[A-Za-z_]{1,32}$")
+
+
+def _safe_identifier(value: str) -> str:
+    """A model-chosen name, only if it looks like an identifier (it could be anything)."""
+    return value if _IDENT.match(value) else "?"
+
+
+def _safe_detail(exc: ValidationError) -> tuple[str, ...]:
+    """Which schema paths failed and how ("field_updates.0.field:enum"), never the values.
+
+    Path parts that are not plain schema-style names (a model-invented key) become "?".
+    """
+    parts: list[str] = []
+    for error in exc.errors()[:5]:
+        path = ".".join(
+            str(p) if isinstance(p, int) or _PATH_PART.match(str(p)) else "?"
+            for p in error["loc"][:4]
+        )
+        parts.append(f"{path}:{error['type']}")
+    return tuple(parts)
 
 
 class _ToolBuffer:
@@ -124,9 +149,11 @@ class _Turn:
     def _finish_tool(self, buffer: _ToolBuffer) -> ToolCall | ToolInputRejected:
         tool = self._tools.get(buffer.name)
         reason: ToolRejection | None = None
+        detail: tuple[str, ...] = ()
         parsed: Any = None
         if tool is None:
             reason = ToolRejection.UNKNOWN_TOOL
+            detail = (_safe_identifier(buffer.name),)
         else:
             raw = "".join(buffer.chunks) or "{}"
             try:
@@ -138,15 +165,20 @@ class _Turn:
                 if not isinstance(parsed, dict):
                     raise TypeError
                 validated = tool.input_model.model_validate(parsed)
-            except (ValidationError, TypeError):
+            except (ValidationError, TypeError) as exc:
                 reason = ToolRejection.SCHEMA_VIOLATION
+                detail = (
+                    _safe_detail(exc) if isinstance(exc, ValidationError) else ("not_an_object",)
+                )
             else:
                 self.called.add(buffer.name)
                 return ToolCall(tool_use_id=buffer.tool_use_id, name=buffer.name, input=validated)
         self.rejected = True
         # Reason code only: the rejected input is never retained or logged.
         return ToolInputRejected(
-            tool_use_id=buffer.tool_use_id, reason=reason or ToolRejection.INVALID_JSON
+            tool_use_id=buffer.tool_use_id,
+            reason=reason or ToolRejection.INVALID_JSON,
+            detail=detail,
         )
 
     def _tool_choice_satisfied(self, tool_choice: str | None) -> bool:

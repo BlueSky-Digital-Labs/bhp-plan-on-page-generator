@@ -23,7 +23,9 @@ export async function signIn(page: Page, code = E2E_ACCESS_CODE) {
   await page.getByRole("button", { name: "Start a new canvas" }).click();
 }
 
+// Signed in and on the conversation screen (waits for the answer form, which only shows once the
+// backend has confirmed the session and returned the stored history).
 export async function signInAndWait(page: Page) {
   await signIn(page);
-  await expect(page.getByText(/Complete the AI Opportunity Canvas/)).toBeVisible();
+  await expect(page.getByLabel("Describe your idea", { exact: true })).toBeVisible();
 }

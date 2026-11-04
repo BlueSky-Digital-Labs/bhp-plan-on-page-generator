@@ -145,6 +145,8 @@ class ToolInputRejected:
 
     tool_use_id: str
     reason: ToolRejection
+    # Content-free diagnostics for operators, e.g. "field_updates.0.field:enum". Never values.
+    detail: tuple[str, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)

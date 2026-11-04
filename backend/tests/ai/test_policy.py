@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 
 import pytest
 
@@ -8,8 +9,11 @@ from app.ai.policy import (
     ApprovedSelection,
     Capability,
     Evidence,
+    LocalApprovalsError,
+    load_local_approvals,
     validate_bedrock_config,
 )
+from app.config import AppEnv
 from tests.ai.conftest import REGISTRY, SELECTION_A, SELECTION_B, VERIFIED_ON
 
 AU = "ap-southeast-2"
@@ -145,3 +149,73 @@ def test_evidence_must_be_complete_and_not_future_dated():
         Evidence(**(ok | {"privacy": " "}), sources=("s",))
     with pytest.raises(ValueError):
         Evidence(**(ok | {"verified_on": dt.date.today() + dt.timedelta(days=1)}), sources=("s",))
+
+
+# --- local-only approvals file ------------------------------------------------------
+
+
+def _local_entry(**overrides):
+    entry = {
+        "model_id": "local.test-model:0",
+        "identifier_kind": "foundation_model",
+        "foundation_model_ids": ["local.test-model:0"],
+        "client_regions": [AU],
+        "inference_regions": [AU],
+        "capabilities": ["converse_stream", "tool_use"],
+        "evidence": {
+            "verified_on": "2026-01-01",
+            "verified_by": "local tester",
+            "regional": "local functional test only",
+            "privacy": "not verified",
+            "capabilities": "smoke test",
+            "sources": ["local"],
+        },
+        "max_tokens_limit": 4096,
+        "temperature_range": [0.0, 1.0],
+        "top_p_range": [0.0, 1.0],
+        "max_stop_sequences": 4,
+        "temperature_and_top_p_exclusive": False,
+        "allowed_additional_fields": [],
+    }
+    return {**entry, **overrides}
+
+
+def _write(tmp_path, entries):
+    path = tmp_path / "approvals.local.json"
+    path.write_text(json.dumps(entries))
+    return path
+
+
+def test_local_approvals_make_a_model_usable_locally_only(tmp_path):
+    path = _write(tmp_path, [_local_entry()])
+    (selection,) = load_local_approvals(AppEnv.LOCAL, path)
+    assert selection.model_id == "local.test-model:0"
+    config = cfg(model_id="local.test-model:0", max_tokens=100)
+    assert validate_bedrock_config(config, (*APPROVED_SELECTIONS, selection)).selection is selection
+    # The production list is untouched, so without the file the model is still rejected.
+    assert codes(config, APPROVED_SELECTIONS).codes == ("unapproved_model",)
+
+
+@pytest.mark.parametrize("app_env", [AppEnv.TEST, AppEnv.DEPLOYED])
+def test_local_approvals_file_is_ignored_outside_local(tmp_path, app_env):
+    assert load_local_approvals(app_env, _write(tmp_path, [_local_entry()])) == ()
+
+
+def test_missing_local_approvals_file_means_no_extra_approvals(tmp_path):
+    assert load_local_approvals(AppEnv.LOCAL, tmp_path / "absent.json") == ()
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [_local_entry(client_regions=["us-east-1"])],  # same Australian-only rule as policy.py
+        [_local_entry(evidence={})],  # incomplete evidence
+        [{"model_id": "x"}],  # missing fields
+        {"not": "a list"},
+    ],
+)
+def test_invalid_local_approvals_are_rejected_without_echoing_content(tmp_path, entries):
+    path = _write(tmp_path, entries)
+    with pytest.raises(LocalApprovalsError) as excinfo:
+        load_local_approvals(AppEnv.LOCAL, path)
+    assert "us-east-1" not in str(excinfo.value) and "local tester" not in str(excinfo.value)

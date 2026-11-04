@@ -13,6 +13,9 @@ from app.access.errors import DependencyUnavailable
 from app.access.service import AccessService
 from app.access.store import InMemorySessionStore
 from app.config import AppEnv, Settings
+from app.conversation.producers import UnavailableProducer
+from app.conversation.service import ConversationService
+from app.conversation.store import InMemoryConversationStore
 from app.main import create_app
 
 CODE = "synthetic-shared-code-123"
@@ -88,11 +91,16 @@ class World:
     store: FlakyStore
     clock: Clock
     service: AccessService
+    conversation: ConversationService
 
     def client(self, **headers) -> TestClient:
         """An independent 'browser': its own cookie jar, https origin, same-origin header."""
         client = TestClient(
-            create_app(self._settings, access_service=self.service),
+            create_app(
+                self._settings,
+                access_service=self.service,
+                conversation_service=self.conversation,  # shared, like a real shared store
+            ),
             base_url=ORIGIN,
             raise_server_exceptions=False,
         )
@@ -105,7 +113,10 @@ class World:
 @pytest.fixture
 def world(tmp_path) -> World:
     secrets, store, clock = FakeSecrets(), FlakyStore(), Clock()
-    w = World(secrets, store, clock, AccessService(secrets, store, clock=clock))
+    conversation = ConversationService(
+        InMemoryConversationStore(), UnavailableProducer(), clock=clock
+    )
+    w = World(secrets, store, clock, AccessService(secrets, store, clock=clock), conversation)
     (tmp_path / "index.html").write_text("<!doctype html>")
     w._settings = Settings(app_env=AppEnv.TEST, static_dir=tmp_path)
     return w

@@ -13,13 +13,19 @@ must never be added from memory.
 from __future__ import annotations
 
 import datetime as dt
+import json
+import logging
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from app.ai.config import BedrockConfig, BedrockSelectionError
+from app.config import AppEnv
+
+logger = logging.getLogger("app.ai")
 
 # Australian AWS Regions. Every client region and every inference destination must be here.
 AUSTRALIAN_REGIONS = frozenset({"ap-southeast-2", "ap-southeast-4"})
@@ -109,6 +115,70 @@ class ValidatedBedrockConfig:
         return capability in self.selection.capabilities
 
 
+# Untracked, local-testing-only approvals. NOT release evidence: see load_local_approvals.
+LOCAL_APPROVALS_FILE = Path(__file__).resolve().parents[2] / "approvals.local.json"
+
+
+class LocalApprovalsError(ValueError):
+    """The local approvals file is unusable. Names the file, never echoes its content."""
+
+
+def _local_selection(raw: dict[str, Any]) -> ApprovedSelection:
+    ev = raw["evidence"]
+    return ApprovedSelection(
+        model_id=raw["model_id"],
+        identifier_kind=IdentifierKind(raw["identifier_kind"]),
+        foundation_model_ids=tuple(raw["foundation_model_ids"]),
+        client_regions=tuple(raw["client_regions"]),
+        inference_regions=tuple(raw["inference_regions"]),
+        capabilities=frozenset(Capability(c) for c in raw["capabilities"]),
+        evidence=Evidence(
+            verified_on=dt.date.fromisoformat(ev["verified_on"]),
+            verified_by=ev["verified_by"],
+            regional=ev["regional"],
+            privacy=ev["privacy"],
+            capabilities=ev["capabilities"],
+            sources=tuple(ev["sources"]),
+        ),
+        max_tokens_limit=raw["max_tokens_limit"],
+        temperature_range=tuple(raw["temperature_range"]),
+        top_p_range=tuple(raw["top_p_range"]),
+        max_stop_sequences=raw["max_stop_sequences"],
+        temperature_and_top_p_exclusive=raw["temperature_and_top_p_exclusive"],
+        allowed_additional_fields=frozenset(raw["allowed_additional_fields"]),
+        require_max_tokens=raw.get("require_max_tokens", True),
+    )
+
+
+def load_local_approvals(
+    app_env: AppEnv | None, path: Path = LOCAL_APPROVALS_FILE
+) -> tuple[ApprovedSelection, ...]:
+    """Extra approvals from the gitignored `backend/approvals.local.json`, for local testing.
+
+    Entries get the same validation as `APPROVED_SELECTIONS` (Australian regions, complete
+    evidence) but are not release evidence. Read only when `APP_ENV=local`, so a deployed or
+    test environment never honours the file and `APPROVED_SELECTIONS` stays the only
+    production list. A missing file means no extra approvals.
+    """
+    if app_env is not AppEnv.LOCAL or not path.is_file():
+        return ()
+    try:
+        entries = json.loads(path.read_text())
+        if not isinstance(entries, list):
+            raise TypeError
+        selections = tuple(_local_selection(entry) for entry in entries)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise LocalApprovalsError(
+            f"{path.name} is invalid ({type(exc).__name__}); fix or delete it"
+        ) from None
+    if selections:
+        # Metadata only: a reminder that these are not production approvals.
+        logger.warning(
+            "local_approvals_loaded", extra={"model_ids": [s.model_id for s in selections]}
+        )
+    return selections
+
+
 def validate_bedrock_config(
     config: BedrockConfig, approved: Sequence[ApprovedSelection] | None = None
 ) -> ValidatedBedrockConfig:
@@ -165,11 +235,13 @@ def validate_bedrock_config(
 
 __all__ = [
     "APPROVED_SELECTIONS",
+    "LocalApprovalsError",
     "AUSTRALIAN_REGIONS",
     "ApprovedSelection",
     "Capability",
     "Evidence",
     "IdentifierKind",
     "ValidatedBedrockConfig",
+    "load_local_approvals",
     "validate_bedrock_config",
 ]

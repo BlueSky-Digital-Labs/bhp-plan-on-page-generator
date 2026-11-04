@@ -9,6 +9,7 @@ from the image or from any Vite build-time variable.
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, ValidationError, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -44,6 +45,12 @@ class Settings(BaseSettings):
     access_code_hash_secret_id: str | None = Field(default=None, validate_default=True)
     cookie_signing_key_secret_id: str | None = Field(default=None, validate_default=True)
 
+    # Where assistant replies come from. "unavailable" never fabricates a reply. "test" is a
+    # scripted producer for presentation tests (never when deployed). "interviewer_bedrock" is the
+    # guided interview using the verified, approved Bedrock configuration; it refuses to start
+    # without one.
+    conversation_producer: Literal["unavailable", "test", "interviewer_bedrock"] = "unavailable"
+
     @property
     def is_deployed(self) -> bool:
         return self.app_env is AppEnv.DEPLOYED
@@ -53,6 +60,13 @@ class Settings(BaseSettings):
     def _deployed_requires_frontend_build(cls, value: Path, info: ValidationInfo) -> Path:
         if info.data.get("app_env") is AppEnv.DEPLOYED and not (value / "index.html").is_file():
             raise ValueError("must contain the compiled frontend when deployed")
+        return value
+
+    @field_validator("conversation_producer")
+    @classmethod
+    def _no_test_producer_when_deployed(cls, value: str, info: ValidationInfo) -> str:
+        if value == "test" and info.data.get("app_env") is AppEnv.DEPLOYED:
+            raise ValueError("not allowed when deployed")
         return value
 
     @field_validator(

@@ -417,3 +417,46 @@ def test_logs_contain_metadata_only(config_a):
 def test_aws_error_helper_really_contains_the_secret():
     # Guard: proves the no-leak assertions above are meaningful.
     assert SECRET in aws_error("X")["Error"]["Message"]
+
+
+# --- content-free diagnostics for rejected tool output ---------------------------------------
+
+
+def _rejection(config_a, events):
+    _, adapter = run(config_a, events)
+    (rejected,) = adapter.collect(REQUEST).rejected
+    return rejected
+
+
+def test_a_schema_rejection_says_which_part_failed_and_how_but_never_the_value(config_a):
+    payload = {"title": 123, "count": "many", "extra": SECRET}  # wrong type, wrong type, extra key
+    rejected = _rejection(config_a, tool_events("tu-1", "write_field", payload))
+    assert rejected.reason is ToolRejection.SCHEMA_VIOLATION
+    assert set(rejected.detail) == {
+        "title:string_type",
+        "count:int_parsing",
+        "extra:extra_forbidden",
+    }
+    assert SECRET not in repr(rejected)
+
+
+def test_a_model_invented_key_is_masked_in_the_detail(config_a):
+    payload = {"title": "x", "count": 1, f"key-{SECRET}": 1}
+    rejected = _rejection(config_a, tool_events("tu-1", "write_field", payload))
+    assert rejected.detail == ("?:extra_forbidden",)  # the odd key is not echoed
+    assert SECRET not in repr(rejected)
+
+
+def test_a_missing_field_is_reported_by_name_and_type(config_a):
+    rejected = _rejection(config_a, tool_events("tu-1", "write_field", {"title": "x"}))
+    assert rejected.detail == ("count:missing",)
+
+
+def test_an_unknown_tool_name_is_reported_only_if_it_looks_like_an_identifier(config_a):
+    assert _rejection(config_a, tool_events("tu-1", "delete_all", {})).detail == ("delete_all",)
+    assert _rejection(config_a, tool_events("tu-1", f"bad name {SECRET}!", {})).detail == ("?",)
+
+
+def test_rejection_detail_does_not_change_event_equality(config_a):
+    rejected = _rejection(config_a, tool_events("tu-1", "write_field", {"title": "x"}))
+    assert rejected == ToolInputRejected("tu-1", ToolRejection.SCHEMA_VIOLATION)

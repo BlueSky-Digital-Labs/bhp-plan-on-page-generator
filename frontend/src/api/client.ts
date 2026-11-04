@@ -47,6 +47,19 @@ function isEnvelope(body: unknown): body is ApiErrorEnvelope {
   return typeof error === "object" && error !== null && typeof (error as { code?: unknown }).code === "string";
 }
 
+function errorFromResponse(
+  status: number,
+  payload: unknown,
+  headerCorrelationId: string | null,
+): ApiError {
+  if (isEnvelope(payload)) {
+    const { code, correlation_id } = payload.error;
+    return new ApiError(status, code, safeCorrelationId(correlation_id) ?? headerCorrelationId);
+  }
+  // Not our envelope (e.g. a gateway error page): keep only the status.
+  return new ApiError(status, "unexpected_response", headerCorrelationId);
+}
+
 export interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
@@ -104,17 +117,78 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     payload = undefined;
   }
 
-  if (!response.ok) {
-    if (isEnvelope(payload)) {
-      const { code, correlation_id } = payload.error;
-      throw new ApiError(response.status, code, safeCorrelationId(correlation_id) ?? headerCorrelationId);
-    }
-    // Not our envelope (e.g. a gateway error page): keep only the status.
-    throw new ApiError(response.status, "unexpected_response", headerCorrelationId);
-  }
+  if (!response.ok) throw errorFromResponse(response.status, payload, headerCorrelationId);
 
   if (payload === undefined) {
     throw new ApiError(response.status, "invalid_response", headerCorrelationId);
   }
   return payload as T;
+}
+
+// Streamed JSON lines (application/x-ndjson) from a same-origin /api/ path. Each line is parsed
+// and handed to `onEvent`; nothing is kept. Resolves when the server ends the stream, and
+// rejects with ApiError for HTTP failures or a connection that breaks part-way. Callers must not
+// treat an interrupted stream as proof of anything: re-read the authoritative state instead.
+export async function apiStream(
+  path: string,
+  onEvent: (event: unknown) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!path.startsWith("/api/")) {
+    throw new Error("apiStream only calls same-origin /api/ paths");
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      credentials: "same-origin",
+      headers: { Accept: "application/x-ndjson" },
+      signal,
+    });
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+    throw new ApiError(null, "network_error", null);
+  }
+
+  const headerCorrelationId = safeCorrelationId(response.headers.get("X-Correlation-ID"));
+  if (!response.ok) {
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = undefined;
+    }
+    throw errorFromResponse(response.status, payload, headerCorrelationId);
+  }
+  if (!response.body) throw new ApiError(response.status, "invalid_response", headerCorrelationId);
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  const flush = (line: string) => {
+    if (!line.trim()) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      throw new ApiError(response.status, "invalid_response", headerCorrelationId);
+    }
+    onEvent(parsed);
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      const lines = buffered.split("\n");
+      buffered = lines.pop() ?? "";
+      lines.forEach(flush);
+    }
+    flush(buffered);
+  } catch (cause) {
+    if (cause instanceof ApiError) throw cause;
+    if (cause instanceof DOMException && cause.name === "AbortError") throw cause;
+    throw new ApiError(null, "network_error", headerCorrelationId); // broke mid-stream
+  }
 }

@@ -7,10 +7,19 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.access.errors import DependencyUnavailable
 from app.access.service import AccessService
 from app.access.wiring import build_access_service
+from app.ai import ConverseStreamAdapter, build_bedrock_runtime_client, get_validated_bedrock_config
+from app.ai.policy import Capability
 from app.api import api_router
 from app.api.access import dependency_unavailable
 from app.config import Settings, get_settings
+from app.conversation.producers import ScriptedTestProducer, UnavailableProducer
+from app.conversation.service import ConversationService
+from app.conversation.store import InMemoryConversationStore, UnavailableConversationStore
 from app.errors import register_exception_handlers
+from app.interview.engine import Interviewer
+from app.interview.extractors import BedrockExtractor
+from app.interview.producer import InterviewerProducer
+from app.interview.store import InMemoryInterviewStore
 from app.logging_config import configure_logging
 from app.middleware import RequestContextMiddleware
 
@@ -34,8 +43,32 @@ class SpaStaticFiles(StaticFiles):
             raise
 
 
+def _build_conversation(settings: Settings) -> ConversationService:
+    # Deployed: no durable turn store exists yet, so fail closed (503) instead of keeping
+    # transcripts in per-process memory behind a load balancer.
+    store = UnavailableConversationStore() if settings.is_deployed else InMemoryConversationStore()
+    choice = settings.conversation_producer
+    if choice == "interviewer_bedrock":
+        # Fails at startup (ConfigError) unless an approved Bedrock selection is configured.
+        validated = get_validated_bedrock_config()
+        adapter = ConverseStreamAdapter(build_bedrock_runtime_client(validated.config), validated)
+        extractor = BedrockExtractor(
+            adapter, force_tool=validated.supports(Capability.FORCED_TOOL_CHOICE)
+        )
+        interview_store = InMemoryInterviewStore()
+        producer = InterviewerProducer(Interviewer(extractor), interview_store)
+        return ConversationService(store, producer, interview=interview_store)
+    producer = (
+        ScriptedTestProducer(delay_seconds=0.05) if choice == "test" else UnavailableProducer()
+    )
+    return ConversationService(store, producer)
+
+
 def create_app(
-    settings: Settings | None = None, *, access_service: AccessService | None = None
+    settings: Settings | None = None,
+    *,
+    access_service: AccessService | None = None,
+    conversation_service: ConversationService | None = None,
 ) -> FastAPI:
     """Build the app (run with `uvicorn --factory app.main:create_app`).
 
@@ -56,6 +89,7 @@ def create_app(
     register_exception_handlers(app)
     app.add_exception_handler(DependencyUnavailable, dependency_unavailable)
     app.state.access = access_service or build_access_service(settings)
+    app.state.conversation = conversation_service or _build_conversation(settings)
     app.include_router(api_router)
 
     # Same-origin serving of the compiled Vite build. Mounted last so /api wins.

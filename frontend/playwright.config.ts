@@ -28,6 +28,9 @@ export default defineConfig({
       STATIC_DIR: "../frontend/dist",
       ACCESS_CODE_HASH: E2E_ACCESS_CODE_HASH,
       COOKIE_SIGNING_KEY: E2E_COOKIE_SIGNING_KEY,
+      // Scripted replies for the presentation tests (never allowed when deployed). The guided
+      // interview needs the Bedrock model, so it is not exercised in these AWS-free browser tests.
+      CONVERSATION_PRODUCER: "test",
     },
   },
 });
