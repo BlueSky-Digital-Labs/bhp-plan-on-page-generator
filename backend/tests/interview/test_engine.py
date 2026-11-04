@@ -13,8 +13,15 @@ from app.interview.engine import (
     is_ready,
     looks_like_override,
 )
-from app.interview.prompts import QUESTIONS, READY_TEXT
-from tests.interview.conftest import ANSWERS, OPENING, Conversation, FakeExtractor, update
+from app.interview.prompts import ACK, QUESTIONS, READY_TEXT
+from tests.interview.conftest import (
+    ANSWERS,
+    OPENING,
+    Conversation,
+    FakeExtractor,
+    reply_to,
+    update,
+)
 
 
 def target_field(convo: Conversation) -> str:
@@ -29,6 +36,8 @@ def answer_everything(convo: Conversation) -> None:
             return
         if t.kind in ("missing", "clarify"):
             convo.say(ANSWERS[t.field])
+        elif t.kind == "probe":
+            convo.say("skip")
         elif t.kind == "confirm":
             convo.say("Yes, that's all." if t.field == "data" else "Also the safety system.")
         else:
@@ -59,10 +68,10 @@ def test_every_questioning_turn_asks_exactly_one_question_about_its_server_chose
         if t is None:
             break
         reply = convo.replies[-1]
-        assert reply.count("?") == 1 and reply.endswith("?"), reply  # one information request
+        assert reply.count("?") == 1 and convo.state.question in reply, reply  # one question
         assert len(reply) < 300
         asked.append(f"{t.kind}:{t.field}")
-        convo.say(ANSWERS.get(t.field, "Yes, that's all."))
+        convo.say(reply_to(t))
     # Fields come out in the fixed order, 'achieve' already captured from the opening message.
     required_asked = [a.split(":")[1] for a in asked if a.startswith("missing")]
     assert required_asked == [f for f in REQUIRED_ORDER if f != "achieve"]
@@ -75,7 +84,7 @@ def test_data_and_systems_get_dedicated_confirmation_turns_even_when_already_men
     while convo.state.target is not None:
         t = convo.state.target
         seen.append((t.kind, t.field))
-        convo.say(ANSWERS.get(t.field, "Yes"))
+        convo.say(reply_to(t, "Yes"))
     # Data and systems were already answered as ordinary required fields, yet each is asked again.
     assert ("missing", "data") in seen and ("missing", "systems") in seen
     confirms = [i for i, (kind, _) in enumerate(seen) if kind == "confirm"]
@@ -95,7 +104,7 @@ def test_both_optional_fields_are_prompted_in_separate_turns_after_the_required_
     while convo.state.target is not None:
         t = convo.state.target
         order.append((t.kind, t.field))
-        convo.say(ANSWERS.get(t.field, "Yes, that's all."))
+        convo.say(reply_to(t))
     assert order[-2:] == [("optional", "businessImpact"), ("optional", "kpis")]
     assert convo.state.prompted == {"businessImpact", "kpis"}
 
@@ -105,7 +114,7 @@ def test_declining_the_optional_fields_does_not_block_readiness():
     convo.say(OPENING)
     while convo.state.target is not None and convo.state.target.kind != "optional":
         t = convo.state.target
-        convo.say(ANSWERS.get(t.field, "Yes, that's all."))
+        convo.say(reply_to(t))
     convo.say("I'd rather not say")  # business impact
     convo.say("skip")  # kpis
     assert convo.state.declined == {"businessImpact", "kpis"}
@@ -132,6 +141,8 @@ def test_without_a_priority_or_opportunity_type_the_canvas_is_never_ready():
     state.canvas["opportunityTypes"] = ["Find Information"]
     assert choose_target(state) == Target("missing", "priority")  # the user's choice is requested
     state.canvas["priority"] = "Low"
+    assert choose_target(state) == Target("probe", "priority")  # why Low? then the obligations
+    state.probed.add("priority")
     assert choose_target(state) == Target("confirm", "data")  # obligations still outstanding
     assert not is_ready(state)
 
@@ -191,7 +202,7 @@ def test_unsupported_fields_values_and_sources_are_rejected_not_coerced(bad_upda
     convo = Conversation(FakeExtractor(Extraction([bad_update])))
     convo.say("something")
     assert convo.state.canvas == {}
-    assert "I couldn't use that" in convo.replies[-1]
+    assert any(a in convo.replies[-1] for a in ACK["nothing"])
 
 
 def test_an_update_with_no_source_turn_is_rejected():
@@ -414,7 +425,7 @@ def test_a_valid_model_question_about_the_selected_target_is_used():
         FakeExtractor(Extraction([update("achieve", "Faster handover")], next_question=good))
     )
     convo.say("We want faster handover.")
-    assert convo.replies[-1].endswith(good)
+    assert good in convo.replies[-1]
 
 
 # --- purity and determinism ------------------------------------------------------------------------
@@ -440,7 +451,7 @@ def test_the_optional_prompt_marker_is_set_only_in_the_state_that_is_committed_w
     convo = Conversation()
     convo.say(OPENING)
     while convo.state.target.kind != "confirm" or convo.state.target.field != "systems":
-        convo.say(ANSWERS.get(convo.state.target.field, "Yes"))
+        convo.say(reply_to(convo.state.target, "Yes"))
     outcome = convo.interviewer.process(convo.state, "Yes", "u99", ("u1", "u99"))
     assert "businessImpact" in outcome.state.prompted  # will be recorded when this turn is stored
     assert "businessImpact" not in convo.state.prompted  # the live state is untouched until then
@@ -469,3 +480,16 @@ def test_the_optional_prompt_marker_is_set_only_in_the_state_that_is_committed_w
 )
 def test_stance_is_read_deterministically_and_only_from_short_replies(text, target, expected):
     assert detect_stance(text, target) == expected
+
+
+@pytest.mark.parametrize("answer", ["yes", "Yes, that's all.", "confirmed"])
+def test_a_yes_to_an_ordinary_question_is_not_read_as_not_knowing(answer):
+    # "affirm" is only ever detected for the data / systems confirmations, so an ordinary question
+    # still goes to the extractor and the field is never marked unknown.
+    extractor = FakeExtractor(Extraction([update("solutionName", "Shift Notes")]), Extraction())
+    convo = Conversation(extractor)
+    convo.say(OPENING)
+    assert convo.state.target == Target("missing", "team")
+    convo.say(answer)
+    assert len(extractor.inputs) == 2  # the answer was read, not short-circuited
+    assert "team" not in convo.state.unknown

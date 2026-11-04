@@ -159,6 +159,33 @@ describe("chat window", () => {
   });
 });
 
+describe("interview phase", () => {
+  const withPhase = (phase: string) => () =>
+    json({ revision: 1, turns: [user(), { ...bot("complete", "Which team owns this?") }], progression: { phase } });
+
+  it.each([
+    ["clarification", "Clarifying a detail"],
+    ["data_and_systems", "Checking data and systems"],
+    ["review_ready", "Ready to review"],
+  ])("shows when the server says the interview is in %s", async (phase, label) => {
+    setup({ "GET /api/conversation": withPhase(phase) });
+    expect(await screen.findByTestId("interview-phase")).toHaveTextContent(label);
+  });
+
+  it("shows nothing extra in the ordinary interview phase or when the server sends no phase", async () => {
+    setup({ "GET /api/conversation": withPhase("interview") });
+    await screen.findByLabelText(/Describe your idea|Your answer/);
+    expect(screen.queryByTestId("interview-phase")).not.toBeInTheDocument();
+  });
+
+  it("never renders anything the response says beyond the fixed label for a known phase", async () => {
+    setup({ "GET /api/conversation": withPhase("<img src=x onerror=alert(1)>") });
+    await screen.findByLabelText(/Describe your idea|Your answer/);
+    expect(screen.queryByTestId("interview-phase")).not.toBeInTheDocument();
+    expect(document.querySelector("img[src='x']")).toBeNull();
+  });
+});
+
 describe("canvas draft", () => {
   it("shows what the server has saved beside the conversation, and refreshes it after each reply", async () => {
     const canvas0 = { fields: {}, missing_required: Array(14).fill("x"), ready_for_review: false };

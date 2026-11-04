@@ -3,7 +3,7 @@ import uuid
 
 from app.conversation.service import ConversationService
 from app.conversation.store import InMemoryConversationStore
-from app.interview.engine import ExtractionFailed, Interviewer
+from app.interview.engine import ExtractionFailed, Interviewer, InterviewState
 from app.interview.producer import InterviewerProducer
 from app.interview.prompts import QUESTIONS, READY_TEXT
 from app.interview.store import InMemoryInterviewStore
@@ -42,8 +42,10 @@ def say(client, text):
 
 def answer_for(reply: str) -> str:
     """Pick the synthetic answer for whatever the interviewer just asked."""
-    if "besides" in reply:
-        return "Yes, that's all." if "data" in reply else "Also the safety system."
+    if "Why does this deserve" in reply:
+        return "skip"  # the follow-up on the chosen priority
+    if "down as the" in reply:  # the dedicated data / systems confirmations
+        return "Yes, that's all." if "as the data" in reply else "Also the safety system."
     for field, (ask, clarify) in QUESTIONS.items():
         if ask in reply or clarify in reply:
             return ANSWERS.get(
@@ -68,9 +70,8 @@ def test_a_rough_idea_is_guided_to_a_complete_canvas_through_the_real_endpoints(
     assert data["canvas"]["ready_for_review"] and data["canvas"]["missing_required"] == []
     assert replies[-1] == READY_TEXT
     for question in replies[:-1]:
-        assert question.count("?") == 1 and question.endswith("?"), (
-            question
-        )  # one question per turn
+        assert question.count("?") == 1, question  # one question per turn
+
     fields = data["canvas"]["fields"]
     assert fields["solutionName"] == "Shift Notes Assistant" and fields["priority"] == "High"
     assert fields["opportunityTypes"] == ["Find Information", "Generate Reports"]
@@ -264,3 +265,76 @@ def test_an_evicted_or_unknown_commit_is_logged_without_content(world, caplog):
         producer.commit(_ctx(9, world.clock()))
     assert [r.getMessage() for r in caplog.records] == ["outcome_missing"]
     assert OPENING not in caplog.text
+
+
+def test_the_history_carries_a_server_computed_progression_that_agrees_with_the_chat(world):
+    wire(world)
+    client = browser(world)
+    reply, data = say(client, OPENING)
+    progress = data["progression"]
+    assert progress["phase"] == "interview"
+    assert progress["outstanding_question"]["target"] == "solutionName"
+    assert progress["outstanding_question"]["text"] in reply  # chat and stored agree
+    assert history(client)["progression"] == progress  # a refresh shows the same thing
+
+    reply, data = say(client, "I don't know")
+    assert data["progression"]["phase"] == "clarification"
+    assert data["progression"]["clarification"]["reason"] == "unsure"
+    assert data["progression"]["outstanding_question"]["target"] == "solutionName"
+
+
+def test_a_failed_turn_and_its_retry_keep_the_same_outstanding_question(world):
+    class Flaky:
+        fail = True
+
+        def extract(self, inp):
+            if self.fail:
+                raise ExtractionFailed("throttled")
+            return AnswerFiler().extract(inp)
+
+    flaky = Flaky()
+    wire(world, flaky)
+    client = browser(world)
+    turn_id = submit(client, OPENING).json()["assistant_turn"]["turn_id"]
+    assert events(client.get(f"/api/conversation/turns/{turn_id}/stream"))[-1]["type"] == "failed"
+    before = history(client)["progression"]
+    assert (
+        before["outstanding_question"] is None and before["phase"] == "interview"
+    )  # nothing moved
+
+    flaky.fail = False
+    client.get(f"/api/conversation/turns/{turn_id}/stream")
+    after = history(client)["progression"]
+    assert after["outstanding_question"]["target"] == "solutionName"
+    client.get(f"/api/conversation/turns/{turn_id}/stream")  # a refresh replays the stored reply
+    assert history(client)["progression"] == after
+
+
+def test_review_eligibility_is_computed_by_the_server_from_the_validator_and_progression(world):
+    wire(world)
+    client = browser(world)
+    reply, data = say(client, OPENING)
+    for _ in range(40):
+        assert data["canvas"]["ready_for_review"] == (
+            data["progression"]["phase"] == "review_ready"
+        )
+        if data["canvas"]["ready_for_review"]:
+            break
+        reply, data = say(client, answer_for(reply))
+    assert data["progression"]["data_and_systems_complete"] is True
+    assert data["progression"]["optional_prompted"] == ["businessImpact", "kpis"]
+    assert data["progression"]["outstanding_question"] is None
+
+
+def test_without_an_interviewer_the_progression_is_an_empty_interview(world):
+    client = browser(world)
+    progress = history(client)["progression"]
+    assert progress["phase"] == "interview" and progress["outstanding_question"] is None
+    assert len(progress["validation"]["missing_required"]) == 14
+
+
+def test_the_progression_has_the_same_keys_with_or_without_an_interviewer(world):
+    from app.interview.engine import progression_view
+
+    client = browser(world)
+    assert set(history(client)["progression"]) == set(progression_view(InterviewState()))

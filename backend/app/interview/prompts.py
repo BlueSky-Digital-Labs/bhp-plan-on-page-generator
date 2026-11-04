@@ -7,7 +7,7 @@ Bump PROMPT_VERSION whenever any wording below changes and re-run the question t
 import re
 from typing import Any
 
-PROMPT_VERSION = "2026-11-03.2"
+PROMPT_VERSION = "2026-11-04.3"
 
 SYSTEM_PROMPT = """\
 You help a colleague fill in an AI opportunity canvas by turning what they say into canvas fields.
@@ -22,6 +22,9 @@ Rules:
   opportunityTypes.
 - opportunityTypes may only contain: Find Information, Generate Reports, Predict Issues,
   Recommend Actions, Analyse Data, Automate Workflows.
+- For opportunityTypes you may map what the user says they want AI to do onto the allowed names
+  when it clearly matches (for example "write the handover report" is Generate Reports). If it
+  does not clearly match, record nothing.
 - Never set priority unless the user explicitly chose Low, Medium, High or Strategic.
 - If the user is unsure or declines, record nothing for that field.
 - If a message says something that contradicts an earlier answer, record the new statement; the
@@ -32,100 +35,137 @@ Rules:
 - Leave next_question empty unless you are certain it asks about one thing only.
 """
 
-ACK = {
-    "captured": "Thanks, I've noted that.",
-    "unsure": "No problem.",
-    "declined": "That's fine, we'll leave that out.",
-    "nothing": "I couldn't use that for the canvas.",
-    "override": "I can only help with completing the canvas.",
-    "conflict": "That's different from what you said earlier.",
-    "unclear": "Sorry, I couldn't tell which one you meant.",
-    "kept_earlier": "I still couldn't tell which you meant, so I've kept what you said first.",
-    "confirmed": "Thanks, that's confirmed.",
+# Short, human acknowledgements. Several per situation so a conversation does not repeat itself; the
+# variant is picked from the turn number, so the same state always gives the same reply. The rule
+# redirect and the contradiction wording are exact and never vary.
+ACK: dict[str, tuple[str, ...]] = {
+    "captured": ("Got it.", "Thanks, that helps.", "That makes sense.", "Good to know.", "Great."),
+    "confirmed": ("Perfect.", "Great, thanks.", "Okay, noted."),
+    "unsure": ("No problem.", "That's okay.", "Fair enough."),
+    "declined": ("That's fine, we'll leave that out.", "No worries, we'll skip that."),
+    "nothing": (
+        "Hmm, I didn't quite catch that.",
+        "Sorry, I couldn't pull an answer out of that.",
+        "I'm not sure I followed that.",
+    ),
+    "override": ("I can only help with completing the canvas.",),
+    "conflict": ("That's different from what you said earlier.",),
+    "unclear": ("Sorry, I couldn't tell which one you meant.",),
+    "kept_earlier": ("I still couldn't tell which you meant, so I've kept what you said first.",),
 }
-READY_TEXT = "Thanks, that covers everything the canvas needs. You can review it next."
+READY_TEXT = "That's everything I need. Have a look at the canvas whenever you're ready."
 
-# field -> (first ask, shorter follow-up that explains what detail is still needed)
+
+def acknowledgement(cue: str, turn_number: int) -> str:
+    options = ACK[cue]
+    return options[turn_number % len(options)]
+
+
+# field -> (first ask, follow-up). Asked as a colleague would, in plain words, about one thing.
+# The follow-up is used when the answer could not be used: it shows how to answer with a small
+# example, then asks again. The examples are synthetic. TIPS add a short hint after a first ask.
 QUESTIONS: dict[str, tuple[str, str]] = {
     "solutionName": (
-        "What would you like to call this solution?",
-        "A short working title is enough. What would you call this solution?",
+        "What would you like to call this idea?",
+        "A short name like “Shift Notes Assistant” works. What would you call it?",
     ),
     "team": (
-        "Which team or department will own or sponsor this?",
-        "Just the name of the team or department is fine. Which team is this for?",
+        "Which team or department is this for?",
+        "I just need the team name, something like “Operations”. Which team is this for?",
     ),
     "currentProcess": (
-        "How is this work done today, step by step in your own words?",
-        "Briefly, what do people actually do today to get this done?",
+        "Could you walk me through how this work gets done today?",
+        "Think of the steps from start to finish, like “copy the notes into a spreadsheet, then "
+        "email a summary”. How is it done today?",
     ),
     "painPoints": (
-        "What are the main problems or frustrations with the way it works today?",
-        "What is the single biggest problem with the current way of working?",
+        "What makes the way it works today painful or frustrating?",
+        "Tell me the biggest headache, like “it takes two hours and details get lost”. "
+        "What problem hurts most?",
     ),
     "futureState": (
-        "If this worked really well, what would the day-to-day work look like?",
-        "Picture it working well. What would be different for the people doing this work?",
+        "If this worked really well, what would a normal day look like?",
+        "Picture a good day once it works, like “notes are captured once and everyone sees the "
+        "same summary”. What would be different?",
     ),
     "achieve": (
-        "What do you want to achieve by using AI here?",
-        "In one sentence, what outcome do you want from AI here?",
+        "What do you want AI to achieve here?",
+        "In one sentence, like “make shift handover faster and safer”. "
+        "What outcome do you want from AI?",
     ),
     "opportunityTypes": (
-        "Which of these fits best: Find Information, Generate Reports, Predict Issues, "
-        "Recommend Actions, Analyse Data or Automate Workflows?",
-        "Please pick one or more of these: Find Information, Generate Reports, Predict Issues, "
-        "Recommend Actions, Analyse Data, Automate Workflows. Which ones fit?",
+        "What kind of help do you want from AI: Find Information, Generate Reports, "
+        "Predict Issues, Recommend Actions, Analyse Data or Automate Workflows?",
+        "Pick whichever fits best, like “Find Information and Generate Reports”. Which of these "
+        "fit: Find Information, Generate Reports, Predict Issues, Recommend Actions, "
+        "Analyse Data or Automate Workflows?",
     ),
     "success": (
-        "How will you know it is working well?",
-        "What is one change you would notice if it succeeded?",
+        "How will you know it's working well?",
+        "Think of one change you'd notice, like “handover takes minutes and nothing is missed”. "
+        "What would success look like?",
     ),
     "users": (
-        "Who would use this solution day to day?",
-        "Which roles or groups would use it?",
+        "Who would use this day to day?",
+        "Roles or groups are fine, like “shift supervisors and area managers”. Who would use it?",
     ),
     "decision": (
         "What decision would this help people make better?",
-        "Think of one choice people make in this work. Which one should this improve?",
+        "Think of one choice people make in this work, like “escalating issues at handover”. "
+        "What decision should it improve?",
     ),
     "data": (
-        "What information or data would it need to work with?",
-        "What records or documents hold the data it would need?",
+        "What data or information would it need to work with?",
+        "Name the records or documents involved, like “shift logs and incident reports”. "
+        "What data would it need?",
     ),
     "systems": (
         "Which existing systems or tools would it need to connect to?",
-        "Which tools or systems do people use for this work today?",
+        "Name the tools people use today, like “the rostering system”. "
+        "Which systems would it connect to?",
     ),
     "risks": (
-        "What risks or dependencies could get in the way?",
-        "What is the one thing most likely to cause trouble for this?",
+        "What could get in the way of this working, such as risks or dependencies?",
+        "Name the one thing most likely to cause trouble, like “notes may contain sensitive "
+        "details”. What risk worries you most?",
     ),
     "priority": (
-        "Which priority would you give this idea: Low, Medium, High or Strategic?",
-        "The priority is your choice. Which one fits: Low, Medium, High or Strategic?",
+        "What priority would you give this idea: Low, Medium, High or Strategic?",
+        "It's your call. Which priority fits: Low, Medium, High or Strategic?",
     ),
     "businessImpact": (
-        "What difference would this make to the business, if you can say?",
-        "You can say you don't know. Roughly, what would improve for the business?",
+        "What difference would this make for the business, if you can say?",
+        "It's fine to say you don't know. Roughly, what would improve for the business?",
     ),
     "kpis": (
-        "How would you measure success, if you have a measure in mind?",
-        "It is fine to say you don't know. What number or measure would show it is working?",
+        "How would you measure success, if you have a number in mind?",
+        "It's fine to say you don't know. What number or measure would show it is working?",
     ),
+}
+
+# A short hint after a first ask, where one helps. Not part of the question itself.
+TIPS = {
+    "probe": "A sentence or two is plenty.",
+    "solutionName": "A rough working title is fine.",
+    "opportunityTypes": "You can pick more than one.",
+    "priority": "It's your choice, so no need to overthink it.",
+    "businessImpact": "Skip it if you're not sure.",
+    "kpis": "Skip it if you're not sure.",
 }
 
 # Dedicated confirmation turns: always asked once, even if the text already mentioned them.
 CONFIRM = {
-    "data": "Is there other data it would need, besides “{v}”?",
-    "systems": "Is there any other system it would need to connect to, besides “{v}”?",
+    "data": "I have “{v}” down as the data so far. Is there any other data it would need?",
+    "systems": "I have “{v}” down as the systems so far. Does it need to connect to any others?",
 }
+# One follow-up on the priority the user chose, so the reason is on the page too.
+PROBE = "Why does this deserve {v} priority?"
 CONFLICT = "Earlier you said “{old}”, but now I heard “{new}”. Which one should I use?"
 
 
 def _quote(value: Any) -> str:
     text = ", ".join(value) if isinstance(value, list) else str(value)
-    text = re.sub(r"[?\s]+", " ", text).strip()  # no stray '?' that would read as a second question
+    text = re.sub(r"[?\s]+", " ", text).strip(" .;,")  # no stray '?'; no dangling full stop
     return text if len(text) <= 100 else text[:99].rstrip() + "…"
 
 
@@ -134,6 +174,8 @@ def render_question(
 ) -> str:
     if kind == "confirm":
         return CONFIRM[field].format(v=_quote(canvas.get(field, "")))
+    if kind == "probe":
+        return PROBE.format(v=_quote(canvas.get(field, "")))
     if kind == "clarify" and conflict_new is not None:
         return CONFLICT.format(old=_quote(canvas.get(field, "")), new=_quote(conflict_new))
     ask, clarify = QUESTIONS[field]
@@ -182,24 +224,29 @@ _JOINED = re.compile(
     r"\bas well as\b|\band also\b|;"
 )
 _LIST_MARKER = re.compile(r"^\s*([-*•]|\d+[.)])\s", re.MULTILINE)
-MAX_QUESTION_CHARS = 240
+MAX_QUESTION_CHARS = 320
+
+
+def question_problem(text: str, field: str) -> str | None:
+    """Why `text` is not exactly one question about `field`, or None when it is."""
+    q = text.strip()
+    low = q.casefold()
+    if not 10 <= len(q) <= MAX_QUESTION_CHARS or "\n" in q or _LIST_MARKER.search(q):
+        return "format"
+    if q.count("?") != 1 or not q.endswith("?"):
+        return "not_one_question"
+    if len(_WH.findall(low)) > 1 or _JOINED.search(low):
+        return "compound"  # two information requests joined into one sentence
+    if not any(word in low for word in _TOPIC_WORDS.get(field, ())):
+        return "off_topic"  # does not address the selected target
+    scan = low
+    for phrase in _OPPORTUNITY_PHRASES:
+        scan = scan.replace(phrase, " ")
+    if any(word in scan for other, words in _STRONG.items() if other != field for word in words):
+        return "other_topic"
+    return None
 
 
 def validate_question(text: str, field: str) -> bool:
     """Is `text` exactly one question about `field`? Not just a question-mark count."""
-    q = text.strip()
-    low = q.casefold()
-    if not 10 <= len(q) <= MAX_QUESTION_CHARS or "\n" in q or _LIST_MARKER.search(q):
-        return False
-    if q.count("?") != 1 or not q.endswith("?"):
-        return False
-    if len(_WH.findall(low)) > 1 or _JOINED.search(low):
-        return False  # compound: two information requests joined into one sentence
-    if not any(word in low for word in _TOPIC_WORDS.get(field, ())):
-        return False  # does not address the selected target
-    scan = low
-    for phrase in _OPPORTUNITY_PHRASES:  # the six type names are not topics in themselves
-        scan = scan.replace(phrase, " ")
-    return not any(
-        word in scan for other, words in _STRONG.items() if other != field for word in words
-    )
+    return question_problem(text, field) is None
