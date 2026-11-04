@@ -98,7 +98,8 @@ class BedrockExtractor:
             detail = tuple(d for r in result.rejected for d in (r.reason.value, *r.detail))
             raise ExtractionFailed(code, detail)
         patch = result.tool_calls[0].input
-        assert isinstance(patch, CanvasPatch)
+        if not isinstance(patch, CanvasPatch):
+            raise ExtractionFailed("unexpected_patch_type")
         return Extraction(
             field_updates=[
                 FieldUpdate(u.field.value, u.value, _sources(u.source_turn_ids, inp))
