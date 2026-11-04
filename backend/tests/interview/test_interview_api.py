@@ -3,7 +3,7 @@ import uuid
 
 from app.conversation.service import ConversationService
 from app.conversation.store import InMemoryConversationStore
-from app.interview.engine import ExtractionFailed, Interviewer
+from app.interview.engine import ExtractionFailed, Interviewer, InterviewState
 from app.interview.producer import InterviewerProducer
 from app.interview.prompts import QUESTIONS, READY_TEXT
 from app.interview.store import InMemoryInterviewStore
@@ -331,3 +331,10 @@ def test_without_an_interviewer_the_progression_is_an_empty_interview(world):
     progress = history(client)["progression"]
     assert progress["phase"] == "interview" and progress["outstanding_question"] is None
     assert len(progress["validation"]["missing_required"]) == 14
+
+
+def test_the_progression_has_the_same_keys_with_or_without_an_interviewer(world):
+    from app.interview.engine import progression_view
+
+    client = browser(world)
+    assert set(history(client)["progression"]) == set(progression_view(InterviewState()))

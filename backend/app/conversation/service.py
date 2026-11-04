@@ -35,6 +35,7 @@ def _empty_progression_view() -> dict[str, Any]:
         "clarification": {"active": False, "reason": None},
         "validation": {"missing_required": list(REQUIRED_ORDER), "unsure": []},
         "data_and_systems_complete": False,
+        "priority_follow_up_asked": False,
         "optional_prompted": [],
         "optional_declined": [],
     }

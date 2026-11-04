@@ -240,7 +240,7 @@ class Interviewer:
             cue = "captured" if self._probe(s, user_text, stance, override) else "declined"
         elif target is not None and target.kind == "clarify" and target.field in s.conflicts:
             cue = self._resolve_conflict(s, target.field, user_text, stance)
-        elif target is not None and stance in ("unsure", "declined", "affirm"):
+        elif target is not None and stance in ("unsure", "declined"):
             self._note_non_answer(s, target, stance)
             cue = "declined" if target.kind == "optional" else "unsure"
         else:

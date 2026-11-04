@@ -480,3 +480,16 @@ def test_the_optional_prompt_marker_is_set_only_in_the_state_that_is_committed_w
 )
 def test_stance_is_read_deterministically_and_only_from_short_replies(text, target, expected):
     assert detect_stance(text, target) == expected
+
+
+@pytest.mark.parametrize("answer", ["yes", "Yes, that's all.", "confirmed"])
+def test_a_yes_to_an_ordinary_question_is_not_read_as_not_knowing(answer):
+    # "affirm" is only ever detected for the data / systems confirmations, so an ordinary question
+    # still goes to the extractor and the field is never marked unknown.
+    extractor = FakeExtractor(Extraction([update("solutionName", "Shift Notes")]), Extraction())
+    convo = Conversation(extractor)
+    convo.say(OPENING)
+    assert convo.state.target == Target("missing", "team")
+    convo.say(answer)
+    assert len(extractor.inputs) == 2  # the answer was read, not short-circuited
+    assert "team" not in convo.state.unknown
