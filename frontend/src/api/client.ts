@@ -47,7 +47,7 @@ function isEnvelope(body: unknown): body is ApiErrorEnvelope {
   return typeof error === "object" && error !== null && typeof (error as { code?: unknown }).code === "string";
 }
 
-function errorFromResponse(
+export function errorFromResponse(
   status: number,
   payload: unknown,
   headerCorrelationId: string | null,

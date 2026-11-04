@@ -1,6 +1,12 @@
 import { readFileSync } from "node:fs";
-import { expect, test } from "@playwright/test";
+import { type Page, expect, test } from "@playwright/test";
 import { E2E_ACCESS_CODE, enterCode, signInAndWait } from "./access";
+
+// Opens a download menu and picks a format, as a user would.
+async function chooseDownload(page: Page, menu: string, item: string) {
+  await page.getByRole("button", { name: new RegExp(`^${menu}`) }).click();
+  await page.getByRole("menuitem", { name: item }).click();
+}
 
 const CID = "0123456789abcdef0123456789abcdef";
 
@@ -435,7 +441,7 @@ test.describe("one-page canvas", () => {
     // A real download of a real one-page A4 landscape PDF (nothing is sent to the server for it).
     const requests: string[] = [];
     page.on("request", (r) => requests.push(`${r.method()} ${new URL(r.url()).pathname}`));
-    const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download PDF" }).click()]);
+    const [download] = await Promise.all([page.waitForEvent("download"), chooseDownload(page, "Download canvas", "PDF")]);
     expect(download.suggestedFilename()).toBe("plan-on-a-page.pdf");
     const file = await download.path();
     const bytes = readFileSync(file);
@@ -444,11 +450,46 @@ test.describe("one-page canvas", () => {
     expect((text.match(/\/Type\s*\/Page[^s]/g) ?? []).length).toBe(1);
     expect(text).toMatch(/\/MediaBox\s*\[\s*0\s+0\s+841\.8\d*\s+595\.2\d*\s*\]/); // A4 landscape
     expect(requests.filter((r) => r.startsWith("POST") || r.includes("/api/"))).toEqual([]);
-    await expect(page.getByRole("button", { name: "Download PDF" })).toBeEnabled(); // ready to download again
+    await expect(page.getByRole("button", { name: /^Download canvas/ })).toBeEnabled(); // ready to download again
     await expect(page.getByRole("alert")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Back to the conversation" }).click();
     await expect(page).toHaveURL(/\/conversation$/);
+  });
+
+  test("the appendix downloads as a file in each format, and the server refuses it until the canvas is complete", async ({ page }) => {
+    await signInAndWait(page);
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: READY })); // the page believes it is ready
+    await page.goto("/review");
+    await expect(page.getByRole("button", { name: /^Download appendix/ })).toBeVisible();
+
+    // The real server knows this session's canvas is not complete, so it says no (and the page says so).
+    await chooseDownload(page, "Download appendix", "PDF");
+    await expect(page.getByRole("alert")).toContainText("The canvas is not complete yet");
+
+    // With a file coming back, the browser saves it under the fixed name (the content is tested on the server).
+    await page.route("**/api/appendix?*", (route) =>
+      route.fulfill({ status: 200, contentType: "application/octet-stream", body: "appendix-bytes" }),
+    );
+    for (const [label, ext] of [["PDF", "pdf"], ["Word (.docx)", "docx"], ["JSON", "json"]]) {
+      const [download] = await Promise.all([page.waitForEvent("download"), chooseDownload(page, "Download appendix", label)]);
+      expect(download.suggestedFilename()).toBe(`plan-on-a-page-appendix.${ext}`);
+      expect(readFileSync(await download.path(), "utf8")).toBe("appendix-bytes");
+    }
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
+  test("the canvas downloads as a PowerPoint file, which the server refuses until the canvas is complete", async ({ page }) => {
+    await signInAndWait(page);
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: READY })); // the page believes it is ready
+    await page.goto("/review");
+    await chooseDownload(page, "Download canvas", "PowerPoint (.pptx)");
+    await expect(page.getByRole("alert")).toContainText("The canvas is not complete yet"); // the real server says no
+
+    await page.route("**/api/canvas-file?*", (route) => route.fulfill({ status: 200, contentType: "application/octet-stream", body: "deck-bytes" }));
+    const [download] = await Promise.all([page.waitForEvent("download"), chooseDownload(page, "Download canvas", "PowerPoint (.pptx)")]);
+    expect(download.suggestedFilename()).toBe("plan-on-a-page.pptx");
+    expect(readFileSync(await download.path(), "utf8")).toBe("deck-bytes");
   });
 
   test("prints to a single dark landscape page", async ({ page }) => {

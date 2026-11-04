@@ -20,6 +20,12 @@ function at(path: string) {
   window.history.replaceState(null, "", path);
 }
 
+// Opens a download menu and picks a format, as a user would.
+async function chooseDownload(menu: string, item: string) {
+  await userEvent.click(await screen.findByRole("button", { name: new RegExp(`^${menu}`) }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: item }));
+}
+
 beforeEach(() => at("/"));
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -204,11 +210,11 @@ describe("review route (the one-page canvas)", () => {
     render(<App />);
     expect(await screen.findByRole("heading", { level: 1, name: /AI OPPORTUNITY CANVAS/ })).toBeInTheDocument();
     expect(screen.getByText("Shift Notes Assistant")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Download PDF" }));
+    await chooseDownload("Download canvas", "PDF");
     expect(downloadPdf).toHaveBeenCalledTimes(1);
     expect(downloadPdf.mock.calls[0][0]).toHaveClass("one-pager"); // the rendered canvas, not anything else
     expect(downloadPdf.mock.calls[0][1]).toBe("plan-on-a-page.pdf");
-    expect(screen.getByText(/Open the file to check it/)).toBeInTheDocument();
+    expect(screen.getByText(/Open a file to check it/)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -217,12 +223,140 @@ describe("review route (the one-page canvas)", () => {
     mockApi({ "GET /api/session": SIGNED_IN, "GET /api/conversation": () => json(READY) });
     at("/review");
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Download PDF" }));
+    await chooseDownload("Download canvas", "PDF");
     expect(await screen.findByRole("alert")).toHaveTextContent("The PDF could not be created");
     expect(screen.queryByText(/canvas failed/)).not.toBeInTheDocument(); // no internal detail shown
-    await userEvent.click(screen.getByRole("button", { name: "Download PDF" }));
+    await chooseDownload("Download canvas", "PDF");
     expect(downloadPdf).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  describe("PowerPoint canvas", () => {
+    let saved: Array<{ download: string }>;
+    beforeEach(() => {
+      saved = [];
+      vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:test", revokeObjectURL: () => {} }));
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+        saved.push({ download: this.download });
+      });
+    });
+    const open = async (file: () => Response) => {
+      const api = mockApi({
+        "GET /api/session": SIGNED_IN,
+        "GET /api/conversation": () => json(READY),
+        "GET /api/canvas-file?format=pptx": file,
+      });
+      at("/review");
+      render(<App />);
+      await screen.findByRole("button", { name: /^Download canvas/ });
+      return api;
+    };
+
+    it("downloads the canvas as a PowerPoint slide under a fixed name", async () => {
+      const { calls } = await open(() => new Response(new Blob(["x"]), { status: 200 }));
+      await chooseDownload("Download canvas", "PowerPoint (.pptx)");
+      await waitFor(() => expect(saved).toEqual([{ download: "plan-on-a-page.pptx" }]));
+      expect(calls.some((c) => c.key === "GET /api/canvas-file?format=pptx")).toBe(true);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("explains a refusal in fixed words, and any other failure generically", async () => {
+      await open(() => envelope("canvas_not_ready", 409));
+      await chooseDownload("Download canvas", "PowerPoint (.pptx)");
+      expect(await screen.findByRole("alert")).toHaveTextContent("The canvas is not complete yet");
+      expect(screen.queryByText(/SERVER-TEXT-MUST-NEVER-RENDER/)).not.toBeInTheDocument();
+    });
+
+    it("says it could not be created when the server fails, and can be retried", async () => {
+      await open(() => envelope("canvas_failed", 500));
+      await chooseDownload("Download canvas", "PowerPoint (.pptx)");
+      expect(await screen.findByRole("alert")).toHaveTextContent("The PowerPoint file could not be created");
+      expect(screen.getByRole("button", { name: /^Download canvas/ })).toBeEnabled();
+    });
+
+    it("returns to entry when the session has ended", async () => {
+      await open(() => envelope("unauthenticated", 401));
+      await chooseDownload("Download canvas", "PowerPoint (.pptx)");
+      await waitFor(() => expect(window.location.pathname).toBe("/"));
+    });
+  });
+
+  describe("appendix", () => {
+    const file = () => new Response(new Blob(["bytes"]), { status: 200, headers: { "Content-Type": "application/pdf" } });
+    let saved: Array<{ download: string; href: string }>;
+
+    beforeEach(() => {
+      saved = [];
+      vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:test", revokeObjectURL: () => {} }));
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+        saved.push({ download: this.download, href: this.href });
+      });
+    });
+
+    const open = async (appendix: () => Response | Promise<Response>) => {
+      const api = mockApi({
+        "GET /api/session": SIGNED_IN,
+        "GET /api/conversation": () => json(READY),
+        "GET /api/appendix?format=pdf": appendix,
+        "GET /api/appendix?format=docx": appendix,
+        "GET /api/appendix?format=json": appendix,
+      });
+      at("/review");
+      render(<App />);
+      await screen.findByRole("button", { name: /^Download appendix/ });
+      return api;
+    };
+
+    it.each([
+      ["PDF", "pdf"],
+      ["Word (.docx)", "docx"],
+      ["JSON", "json"],
+    ])("downloads the appendix as %s under a fixed file name", async (label, format) => {
+      const { calls } = await open(file);
+      await chooseDownload("Download appendix", label);
+      await waitFor(() => expect(saved).toHaveLength(1));
+      expect(saved[0].download).toBe(`plan-on-a-page-appendix.${format}`);
+      expect(calls.some((c) => c.key === `GET /api/appendix?format=${format}`)).toBe(true);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("explains a refusal in fixed words and never shows what the server said", async () => {
+      await open(() => envelope("canvas_not_ready", 409));
+      await chooseDownload("Download appendix", "PDF");
+      expect(await screen.findByRole("alert")).toHaveTextContent("The canvas is not complete yet");
+      expect(screen.queryByText(/SERVER-TEXT-MUST-NEVER-RENDER/)).not.toBeInTheDocument();
+      expect(saved).toHaveLength(0);
+    });
+
+    it("says it could not be created for any other failure, and can be retried", async () => {
+      await open(() => envelope("appendix_failed", 500));
+      await chooseDownload("Download appendix", "Word (.docx)");
+      expect(await screen.findByRole("alert")).toHaveTextContent("The appendix could not be created");
+      expect(screen.getByRole("button", { name: /^Download appendix/ })).toBeEnabled();
+    });
+
+    it("returns to entry when the session has ended", async () => {
+      await open(() => envelope("unauthenticated", 401));
+      await chooseDownload("Download appendix", "JSON");
+      await waitFor(() => expect(window.location.pathname).toBe("/"));
+    });
+
+    it("only offers one download at a time", async () => {
+      let release!: () => void;
+      await open(() => new Promise<Response>((resolve) => (release = () => resolve(file()))));
+      await chooseDownload("Download appendix", "PDF");
+      expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled(); // one download at a time
+      release();
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Download appendix/ })).toBeEnabled());
+    });
+
+    it("is not offered while the canvas is incomplete", async () => {
+      mockApi({ "GET /api/session": SIGNED_IN, "GET /api/conversation": () => json(NOT_READY) });
+      at("/review");
+      render(<App />);
+      await screen.findByText("Your canvas is not complete yet");
+      expect(screen.queryByRole("button", { name: /Download appendix/ })).not.toBeInTheDocument();
+    });
   });
 
   it("does not render a canvas that is not complete, and explains what is left", async () => {

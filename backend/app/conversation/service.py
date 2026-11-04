@@ -1,17 +1,20 @@
 import json
 import logging
 import re
+import threading
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
 from app.access.store import Session
+from app.appendix.model import AppendixError, ExportSnapshot
 from app.conversation.producers import ProducerUnavailable, TurnContext, TurnProducer
 from app.conversation.store import SubmitResult, Turn
 from app.interview.canvas import REQUIRED_ORDER
 
 logger = logging.getLogger("app.conversation")
 
+_MAX_OVERVIEWS = 200
 MAX_REPLY_CHARS = 8000  # a runaway producer cannot grow a stored turn without bound
 
 
@@ -53,9 +56,13 @@ class ConversationService:
         *,
         clock: Callable[[], datetime] = _utcnow,
         interview: Any = None,
+        summarizer: Any = None,
     ) -> None:
         self._store, self._producer, self._clock = store, producer, clock
         self._interview = interview  # optional: where the canvas draft lives
+        self._summarizer = summarizer  # optional: writes the appendix overview
+        self._overviews: dict[tuple[str, int], str] = {}  # (session, revision) -> overview
+        self._overview_lock = threading.Lock()
 
     def history(self, session: Session) -> dict[str, Any]:
         revision, turns = self._store.history(session.session_id)
@@ -88,8 +95,52 @@ class ConversationService:
             self._clock(),
         )
 
+    def export_snapshot(self, session: Session) -> ExportSnapshot:
+        """One consistent copy of the confirmed conversation and draft, for the appendix.
+
+        Only a canvas the server says is ready can be exported. If an answer is submitted while
+        the copy is being taken, it is taken again, so the revision always matches the content.
+        """
+        if self._interview is None:
+            raise AppendixError("not_ready")
+        sid = session.session_id
+        for _ in range(2):
+            revision, turns = self._store.history(sid)
+            canvas, declined, ready = self._interview.snapshot(sid)
+            if self._store.history(sid)[0] == revision:
+                if not ready:
+                    raise AppendixError("not_ready")
+                return ExportSnapshot(revision, canvas, declined, tuple(turns))
+        raise AppendixError("changed")
+
+    def overview_for(self, session: Session, revision: int, turns: tuple[Any, ...]) -> str | None:
+        """The AI-written overview of this revision of the conversation, or None.
+
+        Written once per revision and kept only in memory (so the three file formats agree and a
+        second download is quick). Any failure means no overview, never a failed download.
+        """
+        if self._summarizer is None or not turns:
+            return None
+        key = (session.session_id, revision)
+        with self._overview_lock:
+            if key in self._overviews:
+                return self._overviews[key]
+        try:
+            overview = self._summarizer.summarize(turns)
+        except Exception as exc:  # noqa: BLE001 - the appendix does not depend on it
+            logger.warning("summary_failed", extra={"reason": type(exc).__name__[:40]})
+            return None
+        if overview:
+            with self._overview_lock:
+                if len(self._overviews) >= _MAX_OVERVIEWS:
+                    self._overviews.pop(next(iter(self._overviews)))  # the oldest
+                self._overviews[key] = overview
+        return overview
+
     def delete_session(self, session_id: str) -> None:
         """Drop everything recorded for a session (used when the session is ended)."""
+        with self._overview_lock:
+            self._overviews = {k: v for k, v in self._overviews.items() if k[0] != session_id}
         self._store.delete_session(session_id)
         if self._interview is not None:
             self._interview.delete_session(session_id)

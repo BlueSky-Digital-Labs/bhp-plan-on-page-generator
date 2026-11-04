@@ -108,5 +108,12 @@ def clean_value(field: str, raw: Any) -> str | list[str] | None:
     return text if 0 < len(text) <= MAX_TEXT else None
 
 
+def is_filled(value: Any) -> bool:
+    """A real answer: not empty, and not just spaces."""
+    if isinstance(value, str):
+        return bool(value.strip())
+    return bool(value)
+
+
 def missing_required(canvas: Canvas) -> list[str]:
-    return [f for f in REQUIRED_ORDER if not canvas.get(f)]
+    return [f for f in REQUIRED_ORDER if not is_filled(canvas.get(f))]
