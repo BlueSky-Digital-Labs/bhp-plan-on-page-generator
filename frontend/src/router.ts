@@ -6,6 +6,7 @@ export const ROUTES = {
   entry: "/",
   start: "/start",
   conversation: "/conversation",
+  review: "/review", // the finished canvas as a one-pager
   canvas: "/canvas", // the original template form, kept reachable but not linked
 } as const;
 

@@ -12,7 +12,7 @@ access-code rotation runbook. The conversation screen and its turn/stream API ar
 backend/    FastAPI app (app/), pytest tests, uv project (pyproject.toml + uv.lock)
 frontend/   Vite + React + TypeScript, Vitest tests, Playwright smoke checks (e2e/)
 Dockerfile  Multi-stage build, non-root runtime, same-origin serving
-docs/       frontend-contract.md, bedrock.md, access-control.md, conversation.md
+docs/       frontend-contract.md, bedrock.md, access-control.md, conversation.md, interview.md, interview.md
 ```
 
 Requires [uv](https://docs.astral.sh/uv/) (it installs Python 3.13 itself) and Node 22+
@@ -71,7 +71,7 @@ group health check at `/api/health`.
 | `LOG_LEVEL` | no | Default `INFO`. JSON logs, metadata only. |
 | `STATIC_DIR` | no | Compiled assets; set to `/app/static` in the image. |
 | `SESSIONS_TABLE_NAME`, `ACCESS_CODE_HASH_SECRET_ID`, `COOKIE_SIGNING_KEY_SECRET_ID` | when `deployed` | Names of the DynamoDB table and the two Secrets Manager secrets for access control. Identifiers only, never secret values. See [docs/access-control.md](docs/access-control.md). |
-| `CONVERSATION_PRODUCER` | no | `unavailable` (default, never fabricates replies) or `test` (scripted, local/test only; refused when deployed). See [docs/conversation.md](docs/conversation.md). |
+| `CONVERSATION_PRODUCER` | no | `unavailable` (default, never fabricates replies), `interviewer_bedrock` (the guided interview using the approved Bedrock model; startup fails without one) or `test` (scripted, presentation tests only; refused when deployed). See [docs/conversation.md](docs/conversation.md) and [docs/interview.md](docs/interview.md). |
 | `ACCESS_CODE_HASH`, `COOKIE_SIGNING_KEY` | local only | Local/test secret values. Deployed reads Secrets Manager through the task role; never committed or built into assets. |
 
 Bedrock model selection and generation settings (`BEDROCK_*`) are documented, with

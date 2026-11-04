@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { SESSION, csrfRoute, envelope, json, mockApi } from "./test/mockApi";
 
+// Building the PDF needs a real canvas and layout engine; the real thing is covered by the browser tests.
+const downloadPdf = vi.hoisted(() => vi.fn<(el: HTMLElement, filename: string) => Promise<void>>());
+vi.mock("./canvas/downloadPdf", () => ({ downloadOnePagerPdf: downloadPdf }));
+
 const CID = "fedcba9876543210fedcba9876543210";
 const PERMITTED = () => json({ start_permitted: true });
 const NOT_PERMITTED = () => json({ start_permitted: false });
@@ -182,6 +186,69 @@ describe("conversation route", () => {
     await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     expect(await screen.findByLabelText("Access code")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/");
+  });
+});
+
+describe("review route (the one-page canvas)", () => {
+  const READY = {
+    revision: 3,
+    turns: [],
+    canvas: { fields: { solutionName: "Shift Notes Assistant", team: "Ops", priority: "High", opportunityTypes: ["Analyse Data"] }, missing_required: [], ready_for_review: true },
+  };
+  const NOT_READY = { revision: 1, turns: [], canvas: { fields: {}, missing_required: ["team", "priority"], ready_for_review: false } };
+
+  it("shows the one-pager only when the server says the canvas is ready, and can download it as a PDF", async () => {
+    downloadPdf.mockResolvedValue(undefined);
+    mockApi({ "GET /api/session": SIGNED_IN, "GET /api/conversation": () => json(READY) });
+    at("/review");
+    render(<App />);
+    expect(await screen.findByRole("heading", { level: 1, name: /AI OPPORTUNITY CANVAS/ })).toBeInTheDocument();
+    expect(screen.getByText("Shift Notes Assistant")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Download PDF" }));
+    expect(downloadPdf).toHaveBeenCalledTimes(1);
+    expect(downloadPdf.mock.calls[0][0]).toHaveClass("one-pager"); // the rendered canvas, not anything else
+    expect(downloadPdf.mock.calls[0][1]).toBe("plan-on-a-page.pdf");
+    expect(screen.getByText(/Open the file to check it/)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says so, and lets the user try again, when the PDF cannot be created", async () => {
+    downloadPdf.mockRejectedValueOnce(new Error("canvas failed")).mockResolvedValueOnce(undefined);
+    mockApi({ "GET /api/session": SIGNED_IN, "GET /api/conversation": () => json(READY) });
+    at("/review");
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Download PDF" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The PDF could not be created");
+    expect(screen.queryByText(/canvas failed/)).not.toBeInTheDocument(); // no internal detail shown
+    await userEvent.click(screen.getByRole("button", { name: "Download PDF" }));
+    expect(downloadPdf).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("does not render a canvas that is not complete, and explains what is left", async () => {
+    mockApi({ "GET /api/session": SIGNED_IN, "GET /api/conversation": () => json(NOT_READY) });
+    at("/review");
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Your canvas is not complete yet" })).toBeInTheDocument();
+    expect(screen.getByText(/2 required answers are still to go/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /AI OPPORTUNITY CANVAS/ })).not.toBeInTheDocument();
+  });
+
+  it("requires a session: without one it returns to entry and shows no canvas", async () => {
+    mockApi({ "GET /api/session": () => envelope("unauthenticated", 401), "GET /api/access-state": NOT_PERMITTED });
+    at("/review");
+    render(<App />);
+    expect(await screen.findByLabelText("Access code")).toBeInTheDocument();
+    expect(screen.queryByText(/AI OPPORTUNITY CANVAS/)).not.toBeInTheDocument();
+  });
+
+  it("shows a safe, retryable message if the canvas cannot be loaded", async () => {
+    mockApi({ "GET /api/session": SIGNED_IN, "GET /api/conversation": () => envelope("internal_error", 500, CID) });
+    at("/review");
+    render(<App />);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Something went wrong. Please try again.");
+    expect(alert).toHaveTextContent(CID);
   });
 });
 

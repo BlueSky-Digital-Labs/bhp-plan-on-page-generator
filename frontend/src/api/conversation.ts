@@ -7,10 +7,18 @@ export interface Turn {
   status: "complete" | "pending" | "failed";
 }
 
+// The canvas draft the interviewer has built so far. Field ids match src/canvas/fields.ts.
+export interface CanvasView {
+  fields: Record<string, string | string[]>;
+  missing_required: string[];
+  ready_for_review: boolean;
+}
+
 // The stored history is the source of truth. `revision` is the version the next answer builds on.
 export interface Conversation {
   revision: number;
   turns: Turn[];
+  canvas?: CanvasView;
 }
 
 export interface Submission {

@@ -44,6 +44,8 @@ text fragments and a terminal state.
 
 ## Where replies come from
 
+The guided interviewer is documented in [interview.md](interview.md). The producers below are the seam it plugs into.
+
 `TurnProducer` is the seam for the real interviewer (feature 11). The default
 (`CONVERSATION_PRODUCER=unavailable`) **never fabricates a reply**: the stream ends with
 `failed / unavailable` and the screen offers a retry. `CONVERSATION_PRODUCER=test` enables a

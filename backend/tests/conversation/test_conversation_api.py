@@ -63,7 +63,8 @@ def test_ending_the_session_deletes_its_conversation(world):
 
 
 def test_a_new_session_starts_with_an_empty_conversation(world):
-    assert history(browser(world)) == {"revision": 0, "turns": []}
+    empty = history(browser(world))
+    assert (empty["revision"], empty["turns"]) == (0, [])
 
 
 def test_submitting_records_the_answer_and_a_pending_reply_in_order(world):
@@ -259,7 +260,7 @@ def test_a_session_cannot_stream_or_read_another_sessions_turns(world):
     owner_turn = _pending_turn(owner)
     stream(owner, owner_turn)
 
-    assert history(other) == {"revision": 0, "turns": []}
+    assert (history(other)["revision"], history(other)["turns"]) == (0, [])
     denied = stream(other, owner_turn)
     missing = stream(other, "f" * 32)
     malformed = stream(other, "not-a-turn-id")
@@ -283,7 +284,8 @@ def test_a_new_canvas_never_shows_the_previous_sessions_content(world):
     client = browser(world)
     submit(client, SECRET)
     assert start(client).status_code == 201  # an existing session may start another canvas
-    assert history(client) == {"revision": 0, "turns": []}
+    fresh = history(client)
+    assert (fresh["revision"], fresh["turns"]) == (0, [])
     assert SECRET not in client.get("/api/conversation").text
 
 

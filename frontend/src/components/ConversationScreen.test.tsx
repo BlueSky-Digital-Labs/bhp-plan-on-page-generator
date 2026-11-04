@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { controlledStream, csrfRoute, envelope, json, mockApi, ndjson } from "../test/mockApi";
@@ -11,6 +11,8 @@ const STREAM = `GET /api/conversation/turns/${BOT_ID}/stream`;
 const user = (text = "My idea") => ({ turn_id: USER_ID, role: "user", text, status: "complete" });
 const bot = (status: string, text = "") => ({ turn_id: BOT_ID, role: "assistant", text, status });
 const convo = (revision: number, ...turns: unknown[]) => () => json({ revision, turns });
+const withCanvas = (canvas: unknown, revision: number, ...turns: unknown[]) => () =>
+  json({ revision, turns, canvas });
 const created = (revision = 1) => () =>
   json({ revision, user_turn: user(), assistant_turn: bot("pending") }, 201);
 
@@ -84,6 +86,106 @@ describe("opening screen and history", () => {
     await waitFor(() => expect(onAccessLost).toHaveBeenCalled());
     expect(screen.queryByLabelText(/Describe your idea|Your answer/)).not.toBeInTheDocument();
     expect(screen.queryByRole("list")).not.toBeInTheDocument();
+  });
+});
+
+describe("chat window", () => {
+  const messages = () => document.querySelector(".chat__messages") as HTMLElement;
+  const fakeLayout = (scrollHeight: number) =>
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("chat__messages") ? scrollHeight : 0;
+    });
+
+  it("puts the user's and the assistant's messages on opposite sides, named in words", async () => {
+    setup({ "GET /api/conversation": convo(2, user("First"), bot("complete", "Reply one")) });
+    await screen.findByText("First");
+    const items = within(screen.getByRole("list", { name: "Conversation" })).getAllByRole("listitem");
+    expect(items[0]).toHaveClass("turn--user");
+    expect(items[1]).toHaveClass("turn--assistant");
+    expect(screen.getByRole("region", { name: "Chat with the assistant" })).toHaveTextContent("AI assistant");
+    // Avatars are decorative: the speaker is always named in text.
+    expect(document.querySelectorAll(".avatar[aria-hidden=true]")).toHaveLength(3); // header + 2 turns
+  });
+
+  it("opens at the newest message", async () => {
+    const layout = fakeLayout(1000);
+    setup({ "GET /api/conversation": convo(2, user("First"), bot("complete", "Reply one")) });
+    await screen.findByText("First");
+    expect(messages().scrollTop).toBe(1000);
+    layout.mockRestore();
+  });
+
+  it("follows the reply as it streams, but leaves the user alone once they scroll up to re-read", async () => {
+    let height = 1000;
+    const layout = vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("chat__messages") ? height : 0;
+    });
+    const stream = controlledStream();
+    setup({
+      "GET /api/conversation": [convo(0), convo(1, user(), bot("pending")), convo(1, user(), bot("complete", "Done"))],
+      "POST /api/conversation/turns": created(),
+      [STREAM]: () => stream.response(),
+    });
+    await typeAndSend("My idea");
+    stream.push({ type: "delta", text: "First " });
+    await screen.findByTestId("live-reply");
+    height = 1200;
+    stream.push({ type: "delta", text: "more " });
+    await waitFor(() => expect(messages().scrollTop).toBe(1200)); // following the newest text
+
+    messages().scrollTop = 100; // the user scrolls up to re-read
+    fireEvent.scroll(messages());
+    height = 1500;
+    stream.push({ type: "delta", text: "and more" });
+    await waitFor(() => expect(screen.getByTestId("live-reply")).toHaveTextContent("First more and more"));
+    expect(messages().scrollTop).toBe(100); // not yanked back down
+    stream.push({ type: "complete" });
+    stream.end();
+    layout.mockRestore();
+  });
+
+  it("shows a typing indicator, not an empty bubble, before the first words arrive", async () => {
+    const stream = controlledStream();
+    setup({
+      "GET /api/conversation": [convo(0), convo(1, user(), bot("pending"))],
+      "POST /api/conversation/turns": created(),
+      [STREAM]: () => stream.response(),
+    });
+    await typeAndSend("My idea");
+    await screen.findByTestId("live-reply");
+    expect(document.querySelector(".typing")).not.toBeNull();
+    stream.push({ type: "delta", text: "Hi" });
+    await waitFor(() => expect(document.querySelector(".typing")).toBeNull());
+  });
+});
+
+describe("canvas draft", () => {
+  it("shows what the server has saved beside the conversation, and refreshes it after each reply", async () => {
+    const canvas0 = { fields: {}, missing_required: Array(14).fill("x"), ready_for_review: false };
+    const canvas1 = {
+      fields: { achieve: "Faster handover" },
+      missing_required: Array(13).fill("x"),
+      ready_for_review: false,
+    };
+    setup({
+      "GET /api/conversation": [
+        withCanvas(canvas0, 0),
+        withCanvas(canvas0, 1, user(), bot("pending")),
+        withCanvas(canvas1, 1, user(), bot("complete", "Thanks. What would you like to call this solution?")),
+      ],
+      "POST /api/conversation/turns": created(),
+      [STREAM]: () => ndjson([{ type: "delta", text: "Thanks. " }, { type: "complete" }]),
+    });
+    expect(await screen.findByTestId("canvas-progress")).toHaveTextContent("14 required answers still to go");
+    await typeAndSend("Faster handover");
+    await waitFor(() => expect(screen.getByTestId("canvas-progress")).toHaveTextContent("13 required answers still to go"));
+    expect(within(screen.getByTestId("canvas-achieve")).getByText("Faster handover")).toBeInTheDocument();
+  });
+
+  it("announces readiness from the server's verdict, not from anything the page works out itself", async () => {
+    const ready = { fields: { team: "Ops" }, missing_required: [], ready_for_review: true };
+    setup({ "GET /api/conversation": withCanvas(ready, 2, user(), bot("complete", "All done")) });
+    expect(await screen.findByTestId("canvas-progress")).toHaveTextContent("Ready for review");
   });
 });
 

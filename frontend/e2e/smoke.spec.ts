@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import { E2E_ACCESS_CODE, enterCode, signInAndWait } from "./access";
 
@@ -94,6 +95,19 @@ test.describe("access code", () => {
     await expect(page.getByRole("heading", { name: "Enter the access code" })).toBeVisible();
     await expect(page.getByLabel("Describe your idea", { exact: true })).toHaveCount(0);
     await expect(page.getByLabel("Access code", { exact: true })).toHaveAttribute("type", "password");
+  });
+
+  test("the entry page centres the access card, and the header says BHP", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/");
+    await expect(page.getByLabel("Access code", { exact: true })).toBeVisible();
+    await expect(page.locator("header")).toHaveText("BHP");
+
+    const block = (await page.locator(".entry").boundingBox())!;
+    const main = (await page.locator("main").boundingBox())!;
+    const viewport = page.viewportSize()!;
+    expect(Math.abs(block.x + block.width / 2 - viewport.width / 2)).toBeLessThan(2); // horizontal
+    expect(Math.abs(block.y + block.height / 2 - (main.y + main.height / 2))).toBeLessThan(2); // vertical
   });
 
   test("a wrong code is refused with a generic message and creates no session", async ({ page, context }) => {
@@ -225,6 +239,8 @@ test.describe("entry and start screens", () => {
 test.describe("conversation", () => {
   const IDEA = "We copy shift notes between three spreadsheets and it takes hours.";
   const idea = (page: import("@playwright/test").Page) => page.getByLabel("Describe your idea", { exact: true });
+  const said = (page: import("@playwright/test").Page, text: string) =>
+    page.locator(".transcript").getByText(text, { exact: true });
   const send = async (page: import("@playwright/test").Page, text: string) => {
     await page.getByLabel(/Describe your idea|Your answer/).fill(text);
     await page.getByRole("button", { name: "Send" }).click();
@@ -239,7 +255,7 @@ test.describe("conversation", () => {
     await expect(page.getByText("Assistant said")).toBeVisible();
     await expect(page.getByText(/Could you tell me who would use this/)).toBeVisible();
     await expect(page.getByText(/reply in progress/)).toHaveCount(0);
-    await expect(page.getByText(IDEA)).toHaveCount(1);
+    await expect(said(page, IDEA)).toHaveCount(1);
     await expect(page.getByLabel("Your answer", { exact: true })).toBeVisible();
   });
 
@@ -249,7 +265,7 @@ test.describe("conversation", () => {
     await expect(page.getByText("Assistant said")).toBeVisible();
     await page.reload();
     await expect(page.getByText(/Could you tell me who would use this/)).toBeVisible();
-    await expect(page.getByText(IDEA)).toHaveCount(1);
+    await expect(said(page, IDEA)).toHaveCount(1);
   });
 
   test("a dropped stream recovers from stored state without re-sending the answer", async ({ page }) => {
@@ -257,21 +273,56 @@ test.describe("conversation", () => {
     await page.route("**/stream", (route) => route.abort());
     await send(page, IDEA);
     await expect(page.getByTestId("reply-status")).toContainText("interrupted. Your answer is saved");
-    await expect(page.getByText(IDEA)).toHaveCount(1);
+    await expect(said(page, IDEA)).toHaveCount(1);
 
     await page.unroute("**/stream");
     await page.getByRole("button", { name: "Get the reply" }).click();
     await expect(page.getByText(/Could you tell me who would use this/)).toBeVisible();
-    await expect(page.getByText(IDEA)).toHaveCount(1);
+    await expect(said(page, IDEA)).toHaveCount(1);
   });
 
   test("user and model markup is shown as plain text", async ({ page }) => {
     await signInAndWait(page);
     const hostile = '<img src=x onerror="document.title=\'pwned\'"> <script>document.title="pwned"</script>';
     await send(page, hostile);
-    await expect(page.getByText(hostile)).toBeVisible();
+    await expect(said(page, hostile)).toBeVisible();
     await expect(page.locator("main img, main script")).toHaveCount(0);
     expect(await page.title()).not.toBe("pwned");
+  });
+
+  test("looks like a chat window: sides, fixed height, and the newest message stays in view", async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.setViewportSize({ width: 1280, height: 640 });
+    await signInAndWait(page);
+    const storedReplies = page.locator(".turn--assistant:not(.turn--pending)");
+    for (let i = 1; i <= 4; i++) {
+      await send(page, `Answer number ${i} about the idea.`);
+      await expect(storedReplies).toHaveCount(i);
+    }
+
+    const box = async (selector: string, which: "first" | "last") => {
+      const b = await page.locator(selector)[which]().boundingBox();
+      return b!;
+    };
+    const chat = await box(".chat", "first");
+    const user = await box(".turn--user .turn__bubble", "first");
+    const reply = await box(".turn--assistant .turn__bubble", "first");
+    // Yours on the right, the assistant's on the left, neither spanning the whole width.
+    expect(user.x + user.width / 2).toBeGreaterThan(reply.x + reply.width / 2);
+    expect(reply.x).toBeLessThan(chat.x + chat.width / 2);
+    expect(user.width).toBeLessThan(chat.width * 0.9);
+
+    // The window keeps a fixed height and scrolls inside, instead of the page growing with it.
+    const area = await page.locator(".chat__messages").evaluate((el) => ({
+      scrolls: el.scrollHeight > el.clientHeight, atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 2,
+    }));
+    expect(chat.height).toBeLessThan(640);
+    expect(area).toEqual({ scrolls: true, atBottom: true });
+
+    // The newest reply is fully visible above the answer box.
+    const messages = await box(".chat__messages", "first");
+    const newest = await box(".turn--assistant:not(.turn--pending) .turn__bubble", "last");
+    expect(newest.y + newest.height).toBeLessThanOrEqual(messages.y + messages.height + 1);
   });
 
   test("a new canvas starts empty and never shows the previous conversation", async ({ page }) => {
@@ -291,7 +342,7 @@ test.describe("conversation", () => {
     await expect(page.getByText("Assistant said")).toBeVisible();
     await page.goto("/start");
     await page.goBack();
-    await expect(page.getByText(IDEA)).toHaveCount(1);
+    await expect(said(page, IDEA)).toHaveCount(1);
     await expect(page.getByText(/Could you tell me who would use this/)).toBeVisible();
   });
 
@@ -336,6 +387,93 @@ test.describe("conversation", () => {
     expect(stolen.status()).toBe(404);
     expect(await stolen.text()).not.toContain("Could you tell me");
     expect((await (await other.request.get("/api/conversation")).json()).turns).toEqual([]);
+    await other.close();
+  });
+});
+
+test.describe("one-page canvas", () => {
+  const FIELDS = {
+    solutionName: "Shift Notes Assistant", team: "Operations", priority: "High",
+    opportunityTypes: ["Find Information", "Generate Reports"],
+    currentProcess: "Copy notes between spreadsheets", painPoints: "Takes hours", businessImpact: "",
+    futureState: "One shared summary", achieve: "Faster handover", success: "Handover takes minutes",
+    kpis: "Hours saved per week", users: "Shift supervisors", decision: "What to escalate",
+    data: "Shift logs", systems: "Rostering system", risks: "Sensitive details",
+  };
+  const READY = { revision: 3, turns: [], canvas: { fields: FIELDS, missing_required: [], ready_for_review: true } };
+
+  test("a complete canvas offers 'Generate canvas', which renders the one-pager and can be downloaded as a PDF", async ({ page }) => {
+    await signInAndWait(page);
+    // Nothing offered while the canvas is incomplete (the real server says 14 answers to go).
+    await expect(page.getByRole("button", { name: "Generate canvas" })).toHaveCount(0);
+
+    // The conversation feature is not exercised here, so the server's "ready" verdict is simulated.
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: READY }));
+    await page.reload();
+    await page.getByRole("button", { name: "Generate canvas" }).click();
+
+    await expect(page).toHaveURL(/\/review$/);
+    await expect(page.getByRole("heading", { level: 1, name: /AI OPPORTUNITY CANVAS/ })).toBeVisible();
+    const sheet = page.locator(".one-pager");
+    for (const text of ["Shift Notes Assistant", "Operations", "Copy notes between spreadsheets", "Handover takes minutes", "Rostering system", "Hours saved per week"]) {
+      await expect(sheet).toContainText(text);
+    }
+    await expect(sheet.getByRole("listitem").filter({ hasText: "(selected)" })).toHaveCount(3); // High + 2 types
+    await expect(sheet).toContainText("Not provided"); // the skipped optional field is left blank
+
+    // Colours come straight from the template image.
+    const colours = await page.evaluate(() => {
+      const bg = (sel: string) => getComputedStyle(document.querySelector(sel)!).borderTopColor;
+      return { orange: bg(".op-panel--orange"), purple: bg(".op-panel--purple"), blue: bg(".op-panel--blue"), green: bg(".op-panel--green"),
+        page: getComputedStyle(document.querySelector(".one-pager")!).backgroundColor };
+    });
+    expect(colours).toEqual({
+      orange: "rgb(243, 112, 33)", purple: "rgb(123, 97, 255)", blue: "rgb(2, 181, 226)", green: "rgb(0, 196, 140)",
+      page: "rgb(30, 30, 30)",
+    });
+
+    // A real download of a real one-page A4 landscape PDF (nothing is sent to the server for it).
+    const requests: string[] = [];
+    page.on("request", (r) => requests.push(`${r.method()} ${new URL(r.url()).pathname}`));
+    const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download PDF" }).click()]);
+    expect(download.suggestedFilename()).toBe("plan-on-a-page.pdf");
+    const file = await download.path();
+    const bytes = readFileSync(file);
+    expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+    const text = bytes.toString("latin1");
+    expect((text.match(/\/Type\s*\/Page[^s]/g) ?? []).length).toBe(1);
+    expect(text).toMatch(/\/MediaBox\s*\[\s*0\s+0\s+841\.8\d*\s+595\.2\d*\s*\]/); // A4 landscape
+    expect(requests.filter((r) => r.startsWith("POST") || r.includes("/api/"))).toEqual([]);
+    await expect(page.getByRole("button", { name: "Download PDF" })).toBeEnabled(); // ready to download again
+    await expect(page.getByRole("alert")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Back to the conversation" }).click();
+    await expect(page).toHaveURL(/\/conversation$/);
+  });
+
+  test("prints to a single dark landscape page", async ({ page }) => {
+    await signInAndWait(page);
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: READY }));
+    await page.goto("/review");
+    await expect(page.locator(".one-pager")).toBeVisible();
+    await page.emulateMedia({ media: "print" });
+    await expect(page.locator(".review-actions")).toBeHidden(); // buttons and chrome are not printed
+    await expect(page.locator("header.layout__header")).toBeHidden();
+    const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
+    expect((pdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) ?? []).length).toBe(1);
+  });
+
+  test("an incomplete canvas cannot be generated, and the page needs a session", async ({ page, browser }) => {
+    await signInAndWait(page);
+    await page.goto("/review");
+    await expect(page.getByRole("heading", { name: "Your canvas is not complete yet" })).toBeVisible();
+    await expect(page.locator(".one-pager")).toHaveCount(0);
+
+    const other = await browser.newContext();
+    const anonymous = await other.newPage();
+    await anonymous.goto("/review");
+    await expect(anonymous.getByRole("heading", { name: "Enter the access code" })).toBeVisible();
+    await expect(anonymous.locator(".one-pager")).toHaveCount(0);
     await other.close();
   });
 });

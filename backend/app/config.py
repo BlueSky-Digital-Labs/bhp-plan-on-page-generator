@@ -45,9 +45,11 @@ class Settings(BaseSettings):
     access_code_hash_secret_id: str | None = Field(default=None, validate_default=True)
     cookie_signing_key_secret_id: str | None = Field(default=None, validate_default=True)
 
-    # Where assistant replies come from. "unavailable" never fabricates a reply; "test" is a
-    # scripted producer for local demos and tests only.
-    conversation_producer: Literal["unavailable", "test"] = "unavailable"
+    # Where assistant replies come from. "unavailable" never fabricates a reply. "test" is a
+    # scripted producer for presentation tests (never when deployed). "interviewer_bedrock" is the
+    # guided interview using the verified, approved Bedrock configuration; it refuses to start
+    # without one.
+    conversation_producer: Literal["unavailable", "test", "interviewer_bedrock"] = "unavailable"
 
     @property
     def is_deployed(self) -> bool:

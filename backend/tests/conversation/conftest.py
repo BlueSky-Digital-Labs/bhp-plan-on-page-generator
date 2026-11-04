@@ -13,7 +13,7 @@ class ListProducer:
     def __init__(self, chunks):
         self.chunks, self.calls = list(chunks), 0
 
-    def stream(self, user_text):
+    def stream(self, ctx):
         self.calls += 1
         yield from self.chunks
 
@@ -22,7 +22,7 @@ class RaisingProducer:
     def __init__(self, exc):
         self.exc = exc
 
-    def stream(self, user_text):
+    def stream(self, ctx):
         yield "partial "
         raise self.exc
 

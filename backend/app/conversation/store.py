@@ -100,14 +100,16 @@ class InMemoryConversationStore:
         with self._lock:
             return self._find(session_id, turn_id)
 
-    def preceding_user_text(self, session_id: str, turn_id: str) -> str:
+    def context_for(self, session_id: str, turn_id: str) -> tuple[str, str, tuple[str, ...]]:
+        """(answered user turn id, its text, all user turn ids) for an assistant turn."""
         with self._lock:
             conv = self._conversations.get(session_id)
             turns = conv.turns if conv else []
+            user_ids = tuple(t.turn_id for t in turns if t.role == "user")
             for i, t in enumerate(turns):
                 if t.turn_id == turn_id and i > 0:
-                    return turns[i - 1].text
-            return ""
+                    return turns[i - 1].turn_id, turns[i - 1].text, user_ids
+            return "", "", user_ids
 
     def _replace(self, session_id: str, turn: Turn, **changes) -> Turn:
         conv = self._conversations[session_id]
@@ -115,13 +117,13 @@ class InMemoryConversationStore:
         conv.turns[index] = replace(turn, **changes)
         return conv.turns[index]
 
-    def complete_turn(self, session_id: str, turn_id: str, text: str) -> Turn | None:
-        """Commit the assistant's reply. Set-once: a turn already complete is left untouched."""
+    def complete_turn(self, session_id: str, turn_id: str, text: str) -> tuple[Turn | None, bool]:
+        """Commit the assistant's reply. Set-once; the flag says whether this call did it."""
         with self._lock:
             turn = self._find(session_id, turn_id)
             if turn is None or turn.status == "complete":
-                return turn
-            return self._replace(session_id, turn, text=text, status="complete")
+                return turn, False
+            return self._replace(session_id, turn, text=text, status="complete"), True
 
     def mark(self, session_id: str, turn_id: str, status: Status) -> None:
         """Move a not-yet-complete assistant turn between pending and failed."""
@@ -144,7 +146,7 @@ class UnavailableConversationStore:
     def _fail(self, *_, **__):
         raise DependencyUnavailable("conversation_store_unavailable")
 
-    history = submit = get_turn = preceding_user_text = complete_turn = mark = _fail
+    history = submit = get_turn = context_for = complete_turn = mark = _fail
 
     def delete_session(self, session_id: str) -> None:  # nothing is stored, nothing to delete
         return None
