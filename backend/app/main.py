@@ -11,6 +11,7 @@ from app.ai import ConverseStreamAdapter, build_bedrock_runtime_client, get_vali
 from app.ai.policy import Capability
 from app.api import api_router
 from app.api.access import dependency_unavailable
+from app.appendix.summarizer import BedrockSummarizer
 from app.config import Settings, get_settings
 from app.conversation.producers import ScriptedTestProducer, UnavailableProducer
 from app.conversation.service import ConversationService
@@ -57,7 +58,9 @@ def _build_conversation(settings: Settings) -> ConversationService:
         )
         interview_store = InMemoryInterviewStore()
         producer = InterviewerProducer(Interviewer(extractor), interview_store)
-        return ConversationService(store, producer, interview=interview_store)
+        return ConversationService(
+            store, producer, interview=interview_store, summarizer=BedrockSummarizer(adapter)
+        )
     producer = (
         ScriptedTestProducer(delay_seconds=0.05) if choice == "test" else UnavailableProducer()
     )

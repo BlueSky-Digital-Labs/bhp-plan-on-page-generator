@@ -2,7 +2,7 @@ import copy
 import threading
 from datetime import datetime
 
-from app.interview.engine import InterviewState, canvas_view, progression_view
+from app.interview.engine import InterviewState, canvas_view, is_ready, progression_view
 
 
 class InMemoryInterviewStore:
@@ -30,6 +30,11 @@ class InMemoryInterviewStore:
 
     def progression_view(self, session_id: str) -> dict:
         return progression_view(self.get(session_id))
+
+    def snapshot(self, session_id: str) -> tuple[dict, tuple[str, ...], bool]:
+        """The draft, the optional questions the user skipped, and whether it is ready: one copy."""
+        state = self.get(session_id)
+        return dict(state.canvas), tuple(sorted(state.declined)), is_ready(state)
 
     def delete_session(self, session_id: str) -> None:
         with self._lock:

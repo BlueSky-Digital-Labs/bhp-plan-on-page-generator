@@ -12,6 +12,7 @@ from app.interview.engine import (
     detect_stance,
     is_ready,
     looks_like_override,
+    progression_view,
 )
 from app.interview.prompts import ACK, QUESTIONS, READY_TEXT
 from tests.interview.conftest import (
@@ -493,3 +494,62 @@ def test_a_yes_to_an_ordinary_question_is_not_read_as_not_knowing(answer):
     convo.say(answer)
     assert len(extractor.inputs) == 2  # the answer was read, not short-circuited
     assert "team" not in convo.state.unknown
+
+
+# --- the one-page canvas is offered only when everything required is in ------------------------------
+
+
+def complete_state() -> InterviewState:
+    canvas = {f: "answer" for f in REQUIRED_ORDER}
+    canvas["priority"], canvas["opportunityTypes"] = "High", ["Find Information"]
+    return InterviewState(
+        canvas=canvas,
+        confirmed={"data", "systems"},
+        probed={"priority"},
+        prompted={"businessImpact", "kpis"},
+        declined={"businessImpact", "kpis"},
+    )
+
+
+def test_a_complete_canvas_is_ready_even_though_the_optional_fields_are_empty():
+    state = complete_state()
+    assert is_ready(state) and canvas_view(state)["ready_for_review"]
+    assert canvas_view(state)["missing_required"] == []
+
+
+@pytest.mark.parametrize("missing", REQUIRED_ORDER)
+def test_the_canvas_is_never_ready_while_any_single_required_field_is_missing(missing):
+    state = complete_state()
+    del state.canvas[missing]
+    view = canvas_view(state)
+    assert not view["ready_for_review"] and view["missing_required"] == [missing]
+    assert progression_view(state)["phase"] != "review_ready"
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_a_blank_answer_does_not_count_as_complete(blank):
+    state = complete_state()
+    state.canvas["team"] = blank
+    assert not is_ready(state)
+
+
+@pytest.mark.parametrize(
+    "unfinished",
+    [
+        {"confirmed": {"data"}},  # the systems confirmation has not happened
+        {"confirmed": set()},
+        {"probed": set()},  # the priority follow-up has not been asked
+        {"prompted": {"kpis"}, "declined": {"kpis"}},  # business impact was never asked
+    ],
+)
+def test_the_canvas_is_not_ready_until_the_confirmations_and_prompts_have_happened(unfinished):
+    state = complete_state()
+    for name, value in unfinished.items():
+        setattr(state, name, value)
+    assert not is_ready(state)
+
+
+def test_the_canvas_is_not_ready_while_a_question_is_outstanding():
+    state = complete_state()
+    state.target = Target("optional", "kpis")
+    assert not is_ready(state)

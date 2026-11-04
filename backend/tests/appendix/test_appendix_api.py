@@ -1,0 +1,169 @@
+"""The appendix download, through the real endpoints, and who may get it and when."""
+
+import io
+import json
+import zipfile
+
+import pytest
+from pypdf import PdfReader
+
+from tests.access.conftest import csrf
+from tests.interview.conftest import OPENING, browser
+from tests.interview.test_interview_api import answer_for, history, say, wire
+
+FORMATS = {"pdf": "application/pdf", "json": "application/json"}
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def finish(client):
+    """Drive a conversation to a canvas the server calls ready."""
+    reply, data = say(client, OPENING)
+    for _ in range(40):
+        if data["canvas"]["ready_for_review"]:
+            return data
+        reply, data = say(client, answer_for(reply))
+    raise AssertionError("did not finish")
+
+
+def appendix(client, fmt):
+    return client.get("/api/appendix", params={"format": fmt})
+
+
+@pytest.mark.parametrize("fmt", ["pdf", "docx", "json"])
+def test_an_incomplete_canvas_has_no_appendix(world, fmt):
+    wire(world)
+    client = browser(world)
+    assert appendix(client, fmt).status_code == 409  # nothing said yet
+    say(client, OPENING)
+    response = appendix(client, fmt)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "canvas_not_ready"
+
+
+def test_without_an_interviewer_there_is_nothing_to_export(world):
+    response = appendix(browser(world), "json")
+    assert response.status_code == 409 and response.json()["error"]["code"] == "canvas_not_ready"
+
+
+def test_the_appendix_needs_a_session(world):
+    wire(world)
+    client = browser(world)
+    finish(client)
+    client.cookies.clear()
+    assert appendix(client, "json").status_code == 401
+
+
+def test_an_unknown_format_is_refused(world):
+    wire(world)
+    client = browser(world)
+    finish(client)
+    assert 400 <= appendix(client, "exe").status_code < 500
+    assert 400 <= client.get("/api/appendix").status_code < 500
+
+
+def test_a_ready_canvas_downloads_in_all_three_formats_as_attachments(world):
+    wire(world)
+    client = browser(world)
+    data = finish(client)
+    for fmt, media in {**FORMATS, "docx": DOCX}.items():
+        response = appendix(client, fmt)
+        assert response.status_code == 200, fmt
+        assert response.headers["content-type"].startswith(media)
+        assert response.headers["content-disposition"] == (
+            f'attachment; filename="plan-on-a-page-appendix.{fmt}"'
+        )
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["x-appendix-revision"] == str(data["revision"])
+    assert appendix(client, "pdf").content.startswith(b"%PDF-")
+    assert zipfile.is_zipfile(io.BytesIO(appendix(client, "docx").content))
+
+
+def test_the_download_matches_the_stored_conversation_and_draft_exactly(world):
+    wire(world)
+    client = browser(world)
+    data = finish(client)
+    exported = json.loads(appendix(client, "json").content)
+    stored = [(t["role"], t["text"]) for t in data["turns"] if t["status"] == "complete"]
+    assert [(t["speaker"], t["text"]) for t in exported["conversation"]] == stored
+    assert exported["source_revision"] == data["revision"]
+    answers = {a["id"]: a["value"] for s in exported["sections"] for a in s["answers"]}
+    for field, value in data["canvas"]["fields"].items():
+        assert answers[field] == value  # the full answers, not a summary
+    assert [t["turn"] for t in exported["conversation"]] == list(range(1, len(stored) + 1))
+
+
+def test_the_pdf_carries_the_same_record(world):
+    wire(world)
+    client = browser(world)
+    data = finish(client)
+    text = "".join(
+        p.extract_text() for p in PdfReader(io.BytesIO(appendix(client, "pdf").content)).pages
+    )
+    flat = "".join(text.split())
+    for t in data["turns"]:
+        assert "".join(t["text"].split()) in flat
+
+
+def test_a_new_answer_takes_the_canvas_out_of_ready_so_nothing_half_finished_is_exported(world):
+    wire(world)
+    client = browser(world)
+    finish(client)
+    assert appendix(client, "json").status_code == 200
+    say(
+        client, "Actually, it also needs to cover night shifts."
+    )  # the interviewer asks a follow-up
+    assert history(client)["canvas"]["ready_for_review"] is False
+    assert appendix(client, "json").status_code == 409
+
+
+def test_one_session_never_receives_anothers_appendix(world):
+    wire(world)
+    owner, other = browser(world), browser(world)
+    finish(owner)
+    assert appendix(other, "json").status_code == 409  # their own, unfinished, canvas
+    assert history(other)["turns"] == []
+
+
+def test_a_conversation_that_changes_while_it_is_copied_is_refused_not_mixed(world, monkeypatch):
+    wire(world)
+    client = browser(world)
+    finish(client)
+    store = world.conversation._store
+    real = store.history
+    calls = iter(range(1000))
+    monkeypatch.setattr(store, "history", lambda sid: (next(calls), real(sid)[1]))
+    response = appendix(client, "json")
+    assert (
+        response.status_code == 409 and response.json()["error"]["code"] == "conversation_changed"
+    )
+
+
+def test_downloading_logs_the_event_without_any_content(world):
+    import logging
+
+    records: list[logging.LogRecord] = []
+
+    class Collect(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    wire(world)
+    client = browser(world)
+    finish(client)
+    logger = logging.getLogger("app.appendix")
+    handler = Collect()
+    logger.addHandler(handler)
+    try:
+        appendix(client, "json")
+    finally:
+        logger.removeHandler(handler)
+    assert [r.getMessage() for r in records] == ["appendix_downloaded"]
+    assert OPENING not in repr([r.__dict__ for r in records])
+
+
+def test_ending_the_session_removes_what_could_be_exported(world):
+    wire(world)
+    client = browser(world)
+    finish(client)
+    assert client.delete("/api/session", headers=csrf(client)).status_code == 204
+    assert appendix(client, "json").status_code == 401

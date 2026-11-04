@@ -122,6 +122,14 @@ body:has(.entry) { background: radial-gradient(60rem 28rem at 50% 3rem, #fdf1ea 
 /* ---- One-page canvas (colours sampled from the AI Opportunity Canvas template image) ---- */
 .review-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
 .review-note { color: var(--muted); font-size: 0.875rem; margin: 0 0 1rem; }
+/* A button that opens a short list of formats. */
+.menu { position: relative; display: inline-block; }
+.menu__list {
+  position: absolute; top: calc(100% + 0.25rem); left: 0; z-index: 10; min-width: 100%; padding: 0.25rem;
+  background: #fff; border: 1px solid var(--border); border-radius: 0.5rem; box-shadow: 0 8px 24px rgba(20, 24, 40, 0.16);
+}
+.menu__item { display: block; width: 100%; min-height: 2.5rem; padding: 0.4rem 0.9rem; border: 0; border-radius: 0.375rem; background: transparent; color: var(--fg); text-align: left; white-space: nowrap; }
+.menu__item:hover:not(:disabled), .menu__item:focus-visible { background: #fbeee8; border-color: transparent; color: var(--fg); }
 .canvas-panel__generate { width: 100%; margin: 0.25rem 0 0.75rem; font-weight: 600; }
 
 .one-pager {
