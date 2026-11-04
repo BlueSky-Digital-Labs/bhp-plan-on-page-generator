@@ -92,6 +92,7 @@ class World:
     clock: Clock
     service: AccessService
     conversation: ConversationService
+    mail: object = None  # a MailService, for the email tests
 
     def client(self, **headers) -> TestClient:
         """An independent 'browser': its own cookie jar, https origin, same-origin header."""
@@ -100,6 +101,7 @@ class World:
                 self._settings,
                 access_service=self.service,
                 conversation_service=self.conversation,  # shared, like a real shared store
+                mail_service=self.mail,
             ),
             base_url=ORIGIN,
             raise_server_exceptions=False,

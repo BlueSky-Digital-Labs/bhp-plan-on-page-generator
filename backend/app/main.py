@@ -16,12 +16,15 @@ from app.config import Settings, get_settings
 from app.conversation.producers import ScriptedTestProducer, UnavailableProducer
 from app.conversation.service import ConversationService
 from app.conversation.store import InMemoryConversationStore, UnavailableConversationStore
+from app.delivery import InMemoryDeliveryStore, UnavailableDeliveryStore
 from app.errors import register_exception_handlers
 from app.interview.engine import Interviewer
 from app.interview.extractors import BedrockExtractor
 from app.interview.producer import InterviewerProducer
 from app.interview.store import InMemoryInterviewStore
 from app.logging_config import configure_logging
+from app.mailer import SesMailer, UnavailableMailer, build_ses_client
+from app.mailer.service import MailService
 from app.middleware import RequestContextMiddleware
 
 
@@ -44,10 +47,11 @@ class SpaStaticFiles(StaticFiles):
             raise
 
 
-def _build_conversation(settings: Settings) -> ConversationService:
+def build_conversation(settings: Settings) -> ConversationService:
     # Deployed: no durable turn store exists yet, so fail closed (503) instead of keeping
     # transcripts in per-process memory behind a load balancer.
     store = UnavailableConversationStore() if settings.is_deployed else InMemoryConversationStore()
+    deliveries = UnavailableDeliveryStore() if settings.is_deployed else InMemoryDeliveryStore()
     choice = settings.conversation_producer
     if choice == "interviewer_bedrock":
         # Fails at startup (ConfigError) unless an approved Bedrock selection is configured.
@@ -59,12 +63,37 @@ def _build_conversation(settings: Settings) -> ConversationService:
         interview_store = InMemoryInterviewStore()
         producer = InterviewerProducer(Interviewer(extractor), interview_store)
         return ConversationService(
-            store, producer, interview=interview_store, summarizer=BedrockSummarizer(adapter)
+            store,
+            producer,
+            interview=interview_store,
+            summarizer=BedrockSummarizer(adapter),
+            deliveries=deliveries,
         )
     producer = (
         ScriptedTestProducer(delay_seconds=0.05) if choice == "test" else UnavailableProducer()
     )
-    return ConversationService(store, producer)
+    return ConversationService(store, producer, deliveries=deliveries)
+
+
+class DiscardingMailer:
+    """TEST mode: accepts a message and drops it, so the screens can be exercised without AWS."""
+
+    ready = True
+
+    def send(self, email) -> None:
+        return None
+
+
+def _build_mail(settings: Settings) -> MailService:
+    # Fails at startup (ConfigError, from Settings) when `ses` lacks a sender or allowed domains.
+    domains = settings.allowed_email_domains
+    if settings.email_delivery == "ses":
+        client = build_ses_client(settings.ses_region or settings.aws_region)
+        sender = settings.email_sender_address or ""
+        return MailService(SesMailer(client, sender, settings.email_configuration_set), domains)
+    if settings.email_delivery == "test":
+        return MailService(DiscardingMailer(), domains)
+    return MailService(UnavailableMailer(), domains)
 
 
 def create_app(
@@ -72,6 +101,7 @@ def create_app(
     *,
     access_service: AccessService | None = None,
     conversation_service: ConversationService | None = None,
+    mail_service: MailService | None = None,
 ) -> FastAPI:
     """Build the app (run with `uvicorn --factory app.main:create_app`).
 
@@ -92,7 +122,8 @@ def create_app(
     register_exception_handlers(app)
     app.add_exception_handler(DependencyUnavailable, dependency_unavailable)
     app.state.access = access_service or build_access_service(settings)
-    app.state.conversation = conversation_service or _build_conversation(settings)
+    app.state.conversation = conversation_service or build_conversation(settings)
+    app.state.mail = mail_service or _build_mail(settings)
     app.include_router(api_router)
 
     # Same-origin serving of the compiled Vite build. Mounted last so /api wins.

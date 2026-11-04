@@ -11,10 +11,12 @@ from typing import Annotated
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Form, Request, Response
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.access.errors import AccessRejected, DependencyUnavailable
 from app.access.service import MAX_CODE_LENGTH, AccessService
 from app.access.store import Session
+from app.conversation.service import PurgeRefused
 from app.errors import ApiProblem, correlation_id_of, error_response
 
 logger = logging.getLogger("app.access")
@@ -153,6 +155,13 @@ def read_own_session(session: Annotated[Session, Depends(current_session)]) -> d
     }
 
 
+def _session_ended(request: Request, event: str) -> Response:
+    _log(request, event)
+    response = Response(status_code=204)
+    response.delete_cookie(SESSION_COOKIE, **_COOKIE)
+    return response
+
+
 @router.delete("/session", status_code=204, dependencies=[Depends(require_csrf)])
 def end_own_session(
     request: Request,
@@ -161,10 +170,42 @@ def end_own_session(
 ) -> Response:
     request.app.state.conversation.delete_session(session.session_id)
     service.end_session(session.session_id)
-    _log(request, "session_ended")
-    response = Response(status_code=204)
-    response.delete_cookie(SESSION_COOKIE, **_COOKIE)
-    return response
+    return _session_ended(request, "session_ended")
+
+
+class PurgeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # The revision whose documents the user was shown as downloaded. Nothing else is accepted.
+    revision: Annotated[int, Field(ge=0)]
+
+
+_PURGE_REFUSALS = {
+    "purge_locked": (409, "Deleting is locked until both PDFs have been downloaded."),
+    "revision_conflict": (
+        409,
+        "The canvas has changed since it was shown. Please review it again.",
+    ),
+}
+
+
+@router.post("/session/purge", status_code=204, dependencies=[Depends(require_csrf)])
+def purge_own_session(
+    body: PurgeBody,
+    request: Request,
+    session: Annotated[Session, Depends(current_session)],
+    service: Annotated[AccessService, Depends(get_service)],
+) -> Response:
+    """Delete this session's conversation, canvas and documents, and end the session, but only if
+    the server's own gate says both current PDFs were downloaded. Otherwise nothing is touched."""
+    try:
+        request.app.state.conversation.purge(session, body.revision)
+    except PurgeRefused as exc:
+        _log(request, "purge_refused", exc.reason)
+        status, message = _PURGE_REFUSALS[exc.code]
+        raise ApiProblem(status, exc.code, message) from None
+    service.end_session(session.session_id)
+    return _session_ended(request, "session_purged")
 
 
 async def dependency_unavailable(request: Request, exc: DependencyUnavailable) -> Response:

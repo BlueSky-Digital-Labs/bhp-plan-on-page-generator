@@ -65,6 +65,11 @@ function EntryRoute() {
             Your access has expired or has not been entered. Enter the access code to continue.
           </p>
         )}
+        {readNotice() === "session_deleted" && (
+          <p role="status" className="notice">
+            Your session was deleted. Nothing from it is kept. Enter the access code to start a new one.
+          </p>
+        )}
         <AccessGate onAccepted={() => navigate(ROUTES.start)} />
       </>
     );
@@ -124,7 +129,13 @@ function ConversationRoute() {
 function ReviewRoute() {
   return (
     <SessionPage>
-      {(lost) => <ReviewScreen onBack={() => navigate(ROUTES.conversation)} onAccessLost={lost} />}
+      {(lost) => (
+        <ReviewScreen
+          onBack={() => navigate(ROUTES.conversation)}
+          onAccessLost={lost}
+          onPurged={() => navigate(ROUTES.entry, { replace: true, notice: "session_deleted" })}
+        />
+      )}
     </SessionPage>
   );
 }

@@ -31,10 +31,24 @@ class InMemoryInterviewStore:
     def progression_view(self, session_id: str) -> dict:
         return progression_view(self.get(session_id))
 
-    def snapshot(self, session_id: str) -> tuple[dict, tuple[str, ...], bool]:
-        """The draft, the optional questions the user skipped, and whether it is ready: one copy."""
+    def snapshot(self, session_id: str) -> tuple[dict, tuple[str, ...], bool, int | None]:
+        """The draft, the optional questions skipped, whether it is ready, and the revision the
+        user confirmed (or None): one copy."""
         state = self.get(session_id)
-        return dict(state.canvas), tuple(sorted(state.declined)), is_ready(state)
+        return (
+            dict(state.canvas),
+            tuple(sorted(state.declined)),
+            is_ready(state),
+            state.confirmed_revision,
+        )
+
+    def confirmed_revision(self, session_id: str) -> int | None:
+        return self.get(session_id).confirmed_revision
+
+    def confirm(self, session_id: str, revision: int, expires_at: datetime, now: datetime) -> None:
+        state = self.get(session_id)
+        state.confirmed_revision = revision
+        self.put(session_id, state, expires_at, now)
 
     def delete_session(self, session_id: str) -> None:
         with self._lock:

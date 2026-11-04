@@ -129,7 +129,7 @@ def test_the_conversation_has_a_size_limit(world, monkeypatch):
     [
         {"submission_id": "sub-00000001", "expected_revision": 0, "text": ""},
         {"submission_id": "sub-00000001", "expected_revision": 0, "text": "   \n "},
-        {"submission_id": "sub-00000001", "expected_revision": 0, "text": "x" * 4001},
+        {"submission_id": "sub-00000001", "expected_revision": 0, "text": "x" * 20_001},
         {"submission_id": "short", "expected_revision": 0, "text": "ok"},
         {"submission_id": "bad id!!!!", "expected_revision": 0, "text": "ok"},
         {"submission_id": "sub-00000001", "expected_revision": -1, "text": "ok"},

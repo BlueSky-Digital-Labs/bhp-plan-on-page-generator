@@ -10,6 +10,7 @@ from app.access.store import Session
 from app.appendix.model import AppendixError, ExportSnapshot
 from app.conversation.producers import ProducerUnavailable, TurnContext, TurnProducer
 from app.conversation.store import SubmitResult, Turn
+from app.delivery import DocumentKind, InMemoryDeliveryStore, PurgeGate, evaluate_gate
 from app.interview.canvas import REQUIRED_ORDER
 
 logger = logging.getLogger("app.conversation")
@@ -48,6 +49,15 @@ def turn_json(turn: Turn) -> dict[str, str]:
     return {"turn_id": turn.turn_id, "role": turn.role, "text": turn.text, "status": turn.status}
 
 
+class PurgeRefused(Exception):
+    """A deletion that was not accepted. `code` is 'purge_locked' or 'revision_conflict'; `reason`
+    is the gate's machine-readable lock reason (or None)."""
+
+    def __init__(self, code: str, reason: str | None) -> None:
+        super().__init__(code)
+        self.code, self.reason = code, reason
+
+
 class ConversationService:
     def __init__(
         self,
@@ -57,8 +67,10 @@ class ConversationService:
         clock: Callable[[], datetime] = _utcnow,
         interview: Any = None,
         summarizer: Any = None,
+        deliveries: Any = None,
     ) -> None:
         self._store, self._producer, self._clock = store, producer, clock
+        self._deliveries = deliveries if deliveries is not None else InMemoryDeliveryStore()
         self._interview = interview  # optional: where the canvas draft lives
         self._summarizer = summarizer  # optional: writes the appendix overview
         self._overviews: dict[tuple[str, int], str] = {}  # (session, revision) -> overview
@@ -81,6 +93,11 @@ class ConversationService:
             "turns": [turn_json(t) for t in turns],
             "canvas": canvas,
             "progression": progression,
+            "confirmed_revision": (
+                self._interview.confirmed_revision(session.session_id)
+                if self._interview is not None
+                else None
+            ),
         }
 
     def submit(
@@ -96,22 +113,56 @@ class ConversationService:
         )
 
     def export_snapshot(self, session: Session) -> ExportSnapshot:
-        """One consistent copy of the confirmed conversation and draft, for the appendix.
+        """One consistent copy of the conversation and draft, only while the canvas is complete.
 
-        Only a canvas the server says is ready can be exported. If an answer is submitted while
-        the copy is being taken, it is taken again, so the revision always matches the content.
+        A canvas is only exported once the assistant has finished replying (an answer still being
+        processed means the draft may be about to change). If an answer is submitted while the
+        copy is being taken, it is taken again, so the revision always matches the content.
         """
         if self._interview is None:
             raise AppendixError("not_ready")
         sid = session.session_id
         for _ in range(2):
             revision, turns = self._store.history(sid)
-            canvas, declined, ready = self._interview.snapshot(sid)
+            canvas, declined, ready, confirmed = self._interview.snapshot(sid)
             if self._store.history(sid)[0] == revision:
+                if turns and turns[-1].status != "complete":
+                    raise AppendixError("unfinished")
                 if not ready:
                     raise AppendixError("not_ready")
-                return ExportSnapshot(revision, canvas, declined, tuple(turns))
+                return ExportSnapshot(revision, canvas, declined, tuple(turns), confirmed)
         raise AppendixError("changed")
+
+    def confirm(self, session: Session, revision: int) -> None:
+        """Record that the user confirmed this revision of the canvas after reading it back.
+
+        Only the revision the user was shown, and only while it is still the current, complete one.
+        """
+        snapshot = self.export_snapshot(session)
+        if revision != snapshot.revision:
+            raise AppendixError("stale")
+        self._interview.confirm(session.session_id, revision, session.expires_at, self._clock())
+
+    def confirmed_snapshot(self, session: Session, revision: int) -> ExportSnapshot:
+        """The snapshot for a document, but only if `revision` is the current revision AND the one
+        the user confirmed. Everything else is refused, never quietly served."""
+        snapshot = self.export_snapshot(session)
+        if revision != snapshot.revision:
+            raise AppendixError("stale")
+        if snapshot.confirmed_revision != snapshot.revision:
+            raise AppendixError("not_confirmed")
+        return snapshot
+
+    def still_confirmed(self, session: Session, revision: int) -> bool:
+        """Checked again just before a file is sent: an answer that arrived while it was being
+        built must not let an out-of-date canvas through."""
+        if self._interview is None:
+            return False
+        current, _ = self._store.history(session.session_id)
+        return (
+            current == revision
+            and self._interview.confirmed_revision(session.session_id) == revision
+        )
 
     def overview_for(self, session: Session, revision: int, turns: tuple[Any, ...]) -> str | None:
         """The AI-written overview of this revision of the conversation, or None.
@@ -137,13 +188,66 @@ class ConversationService:
                 self._overviews[key] = overview
         return overview
 
-    def delete_session(self, session_id: str) -> None:
-        """Drop everything recorded for a session (used when the session is ended)."""
+    def record_delivery(self, session: Session, kind: DocumentKind, revision: int) -> bool:
+        """Note that a document was fully sent. Only for the revision that is current *and*
+        confirmed right now, so a response that finishes after an amendment records nothing."""
+        if not self.still_confirmed(session, revision):
+            return False
+        return self._deliveries.record(
+            session.session_id, kind, revision, self._clock(), session.expires_at
+        )
+
+    def download_gate(self, session: Session) -> PurgeGate:
+        """The server's decision on both documents and on deletion, from one consistent read."""
+        sid = session.session_id
+        revision, turns, ready, confirmed = 0, [], False, None
+        stable = False
+        for _ in range(2):
+            revision, turns = self._store.history(sid)
+            if self._interview is not None:
+                _, _, ready, confirmed = self._interview.snapshot(sid)
+            if self._store.history(sid)[0] == revision:
+                stable = True
+                break
+        return evaluate_gate(
+            revision,
+            ready=ready,
+            reply_finished=stable and (not turns or turns[-1].status == "complete"),
+            confirmed_revision=confirmed,
+            deliveries=self._deliveries.get(sid),
+        )
+
+    def purge(self, session: Session, revision: int) -> None:
+        """Delete everything for the session at the user's request, if the gate allows it *now*.
+
+        The gate is evaluated here, never taken from the client, and the final delete only happens
+        if no answer has arrived since: a refused purge changes nothing.
+        """
+        gate = self.download_gate(session)
+        if gate.revision != revision:
+            raise PurgeRefused("revision_conflict", gate.lock_reason)
+        if not gate.purge_eligible:
+            raise PurgeRefused("purge_locked", gate.lock_reason)
+        if not self._store.delete_session_if_revision(session.session_id, revision):
+            raise PurgeRefused("revision_conflict", None)
+        self._drop_derived(session.session_id)
+
+    def expired_session_ids(
+        self, now: datetime, limit: int, after: str | None = None
+    ) -> tuple[list[str], str | None]:
+        return self._store.expired_session_ids(now, limit, after)
+
+    def _drop_derived(self, session_id: str) -> None:
         with self._overview_lock:
             self._overviews = {k: v for k, v in self._overviews.items() if k[0] != session_id}
-        self._store.delete_session(session_id)
         if self._interview is not None:
             self._interview.delete_session(session_id)
+        self._deliveries.delete_session(session_id)
+
+    def delete_session(self, session_id: str) -> None:
+        """Drop everything recorded for a session (sign-out, and scheduled expiry). Idempotent."""
+        self._store.delete_session(session_id)
+        self._drop_derived(session_id)
 
     def get_assistant_turn(self, session: Session, turn_id: str) -> Turn | None:
         """Only the caller's own assistant turns: anything else looks like 'not found'."""

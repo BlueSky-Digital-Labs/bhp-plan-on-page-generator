@@ -25,8 +25,21 @@ def finish(client):
     raise AssertionError("did not finish")
 
 
-def appendix(client, fmt):
-    return client.get("/api/appendix", params={"format": fmt})
+def appendix(client, fmt, revision=None):
+    revision = history(client)["revision"] if revision is None else revision
+    return client.get("/api/appendix", params={"format": fmt, "revision": revision})
+
+
+def confirm(client, revision=None):
+    """The user confirms the revision they read back (the current one unless told otherwise)."""
+    revision = history(client)["revision"] if revision is None else revision
+    return client.post("/api/canvas/confirm", json={"revision": revision}, headers=csrf(client))
+
+
+def finish_confirmed(client):
+    data = finish(client)
+    assert confirm(client).status_code == 200
+    return data
 
 
 @pytest.mark.parametrize("fmt", ["pdf", "docx", "json"])
@@ -48,9 +61,10 @@ def test_without_an_interviewer_there_is_nothing_to_export(world):
 def test_the_appendix_needs_a_session(world):
     wire(world)
     client = browser(world)
-    finish(client)
+    finish_confirmed(client)
+    revision = history(client)["revision"]
     client.cookies.clear()
-    assert appendix(client, "json").status_code == 401
+    assert appendix(client, "json", revision).status_code == 401
 
 
 def test_an_unknown_format_is_refused(world):
@@ -64,13 +78,13 @@ def test_an_unknown_format_is_refused(world):
 def test_a_ready_canvas_downloads_in_all_three_formats_as_attachments(world):
     wire(world)
     client = browser(world)
-    data = finish(client)
+    data = finish_confirmed(client)
     for fmt, media in {**FORMATS, "docx": DOCX}.items():
         response = appendix(client, fmt)
         assert response.status_code == 200, fmt
         assert response.headers["content-type"].startswith(media)
         assert response.headers["content-disposition"] == (
-            f'attachment; filename="plan-on-a-page-appendix.{fmt}"'
+            f'attachment; filename="shift-notes-assistant-appendix-r{data["revision"]}.{fmt}"'
         )
         assert response.headers["cache-control"] == "no-store"
         assert response.headers["x-appendix-revision"] == str(data["revision"])
@@ -81,7 +95,7 @@ def test_a_ready_canvas_downloads_in_all_three_formats_as_attachments(world):
 def test_the_download_matches_the_stored_conversation_and_draft_exactly(world):
     wire(world)
     client = browser(world)
-    data = finish(client)
+    data = finish_confirmed(client)
     exported = json.loads(appendix(client, "json").content)
     stored = [(t["role"], t["text"]) for t in data["turns"] if t["status"] == "complete"]
     assert [(t["speaker"], t["text"]) for t in exported["conversation"]] == stored
@@ -95,7 +109,7 @@ def test_the_download_matches_the_stored_conversation_and_draft_exactly(world):
 def test_the_pdf_carries_the_same_record(world):
     wire(world)
     client = browser(world)
-    data = finish(client)
+    data = finish_confirmed(client)
     text = "".join(
         p.extract_text() for p in PdfReader(io.BytesIO(appendix(client, "pdf").content)).pages
     )
@@ -107,7 +121,7 @@ def test_the_pdf_carries_the_same_record(world):
 def test_a_new_answer_takes_the_canvas_out_of_ready_so_nothing_half_finished_is_exported(world):
     wire(world)
     client = browser(world)
-    finish(client)
+    finish_confirmed(client)
     assert appendix(client, "json").status_code == 200
     say(
         client, "Actually, it also needs to cover night shifts."
@@ -149,7 +163,7 @@ def test_downloading_logs_the_event_without_any_content(world):
 
     wire(world)
     client = browser(world)
-    finish(client)
+    finish_confirmed(client)
     logger = logging.getLogger("app.appendix")
     handler = Collect()
     logger.addHandler(handler)
@@ -164,6 +178,7 @@ def test_downloading_logs_the_event_without_any_content(world):
 def test_ending_the_session_removes_what_could_be_exported(world):
     wire(world)
     client = browser(world)
-    finish(client)
+    finish_confirmed(client)
+    revision = history(client)["revision"]
     assert client.delete("/api/session", headers=csrf(client)).status_code == 204
-    assert appendix(client, "json").status_code == 401
+    assert appendix(client, "json", revision).status_code == 401

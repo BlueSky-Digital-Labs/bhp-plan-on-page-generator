@@ -19,7 +19,7 @@ from app.appendix.summarizer import (
     transcript,
 )
 from tests.ai.conftest import FakeBedrockRuntime, message_stop, metadata, text, validated
-from tests.appendix.test_appendix_api import appendix, finish
+from tests.appendix.test_appendix_api import appendix, finish_confirmed
 from tests.interview.conftest import browser
 from tests.interview.test_interview_api import wire
 
@@ -192,7 +192,7 @@ def test_the_overview_appears_first_in_every_format_and_is_written_once(world):
     wire(world)
     world.conversation._summarizer = stub
     client = browser(world)
-    finish(client)
+    finish_confirmed(client)
     data = json.loads(appendix(client, "json").content)
     assert data["summary"]["overview"] == "The idea is a shift notes assistant for Operations."
     text = pdf_text(appendix(client, "pdf").content)
@@ -205,7 +205,7 @@ def test_the_overview_appears_first_in_every_format_and_is_written_once(world):
 def test_without_an_overview_the_download_still_works_and_says_so(world):
     wire(world)
     client = browser(world)
-    finish(client)  # no summarizer attached
+    finish_confirmed(client)  # no summarizer attached
     data = json.loads(appendix(client, "json").content)
     assert data["summary"]["overview"] is None and data["summary"]["facts"]
     assert "could not be prepared" in pdf_text(appendix(client, "pdf").content)
@@ -215,7 +215,7 @@ def test_a_summarizer_that_fails_never_fails_the_download(world):
     wire(world)
     world.conversation._summarizer = Stub(RuntimeError("down"))
     client = browser(world)
-    finish(client)
+    finish_confirmed(client)
     response = appendix(client, "pdf")
     assert response.status_code == 200 and "could not be prepared" in pdf_text(response.content)
 
@@ -223,7 +223,7 @@ def test_a_summarizer_that_fails_never_fails_the_download(world):
 def test_the_plain_summary_does_not_depend_on_the_overview(world):
     wire(world)
     client = browser(world)
-    finish(client)
+    finish_confirmed(client)
     plain = json.loads(appendix(client, "json").content)["summary"]
     world.conversation._summarizer = Stub("An overview.")
     with_overview = json.loads(appendix(client, "json").content)["summary"]

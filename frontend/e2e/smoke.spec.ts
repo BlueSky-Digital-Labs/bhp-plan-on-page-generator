@@ -8,6 +8,22 @@ async function chooseDownload(page: Page, menu: string, item: string) {
   await page.getByRole("menuitem", { name: item }).click();
 }
 
+// What the server says about the two PDFs. The page only shows it; the real server decides deleting.
+async function mockDownloads(page: Page, canvas: boolean, appendix: boolean, revision = 3) {
+  const lock = canvas ? "appendix_not_downloaded" : appendix ? "canvas_not_downloaded" : "both_not_downloaded";
+  await page.route("**/api/downloads", (route) =>
+    route.fulfill({
+      json: {
+        revision,
+        canvas_downloaded: canvas,
+        appendix_downloaded: appendix,
+        purge_eligible: canvas && appendix,
+        lock_reason: canvas && appendix ? null : lock,
+      },
+    }),
+  );
+}
+
 const CID = "0123456789abcdef0123456789abcdef";
 
 test("page renders and completes a real API round trip", async ({ page }) => {
@@ -296,6 +312,37 @@ test.describe("conversation", () => {
     expect(await page.title()).not.toBe("pwned");
   });
 
+  test("a file can be attached, sent with the answer and found again after a refresh, and bad files are refused", async ({ page }) => {
+    await signInAndWait(page);
+    const input = page.getByTestId("file-input");
+    const json = (data: object) => Buffer.from(JSON.stringify(data, null, 2));
+
+    // A real upload to the real server: the text comes back, and the chip appears.
+    await input.setInputFiles({ name: "idea.json", mimeType: "application/json", buffer: json({ idea: "Shift notes assistant", team: "Operations" }) });
+    await expect(page.locator(".attachment-chip")).toContainText("idea.json");
+    await page.getByLabel("Describe your idea", { exact: true }).fill("Here is our idea.");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    // The answer shows what was typed and the file folded away; a refresh shows the same, stored once.
+    await expect(page.getByText("Here is our idea.")).toBeVisible();
+    const folded = page.locator("details.turn__file");
+    await expect(folded).toHaveCount(1);
+    await expect(folded.locator("summary")).toContainText("Attached file: idea.json");
+    await expect(page.locator(".attachment-chip")).toHaveCount(0); // cleared once sent
+    await expect(page.getByText("Assistant said")).toBeVisible();
+    await page.reload();
+    await expect(page.locator("details.turn__file")).toHaveCount(1);
+    await page.locator("details.turn__file summary").click();
+    await expect(page.locator(".turn__file-text")).toContainText('"team": "Operations"');
+
+    // Files the server cannot use are refused in plain words and nothing is attached.
+    await input.setInputFiles({ name: "broken.docx", mimeType: "application/octet-stream", buffer: Buffer.from("not a word file") });
+    await expect(page.getByRole("alert")).toContainText("could not be read");
+    await expect(page.locator(".attachment-chip")).toHaveCount(0);
+    await input.setInputFiles({ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("hello") });
+    await expect(page.getByRole("alert")).toContainText("Only PDF, Word (.docx), PowerPoint (.pptx) and JSON");
+  });
+
   test("looks like a chat window: sides, fixed height, and the newest message stays in view", async ({ page }) => {
     test.setTimeout(60_000);
     await page.setViewportSize({ width: 1280, height: 640 });
@@ -408,7 +455,7 @@ test.describe("one-page canvas", () => {
   };
   const READY = { revision: 3, turns: [], canvas: { fields: FIELDS, missing_required: [], ready_for_review: true } };
 
-  test("a complete canvas offers 'Generate canvas', which renders the one-pager and can be downloaded as a PDF", async ({ page }) => {
+  test("a complete canvas offers 'Generate canvas', which renders the one-pager and is read back for confirmation", async ({ page }) => {
     await signInAndWait(page);
     // Nothing offered while the canvas is incomplete (the real server says 14 answers to go).
     await expect(page.getByRole("button", { name: "Generate canvas" })).toHaveCount(0);
@@ -438,58 +485,179 @@ test.describe("one-page canvas", () => {
       page: "rgb(30, 30, 30)",
     });
 
-    // A real download of a real one-page A4 landscape PDF (nothing is sent to the server for it).
-    const requests: string[] = [];
-    page.on("request", (r) => requests.push(`${r.method()} ${new URL(r.url()).pathname}`));
-    const [download] = await Promise.all([page.waitForEvent("download"), chooseDownload(page, "Download canvas", "PDF")]);
-    expect(download.suggestedFilename()).toBe("plan-on-a-page.pdf");
-    const file = await download.path();
-    const bytes = readFileSync(file);
-    expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
-    const text = bytes.toString("latin1");
-    expect((text.match(/\/Type\s*\/Page[^s]/g) ?? []).length).toBe(1);
-    expect(text).toMatch(/\/MediaBox\s*\[\s*0\s+0\s+841\.8\d*\s+595\.2\d*\s*\]/); // A4 landscape
-    expect(requests.filter((r) => r.startsWith("POST") || r.includes("/api/"))).toEqual([]);
-    await expect(page.getByRole("button", { name: /^Download canvas/ })).toBeEnabled(); // ready to download again
-    await expect(page.getByRole("alert")).toHaveCount(0);
-
+    // Back to the conversation works from the read-back.
     await page.getByRole("button", { name: "Back to the conversation" }).click();
     await expect(page).toHaveURL(/\/conversation$/);
   });
 
-  test("the appendix downloads as a file in each format, and the server refuses it until the canvas is complete", async ({ page }) => {
+  test("the read-back must be confirmed before any download is offered, then each file downloads under the server's name", async ({ page }) => {
     await signInAndWait(page);
-    await page.route("**/api/conversation", (route) => route.fulfill({ json: READY })); // the page believes it is ready
+    await mockDownloads(page, false, false);
+    let confirmed: number | null = null;
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: confirmed } }));
+    await page.route("**/api/canvas/confirm", (route) => {
+      expect(route.request().postDataJSON()).toEqual({ revision: READY.revision }); // the revision that was shown
+      confirmed = READY.revision;
+      return route.fulfill({ json: { ...READY, confirmed_revision: confirmed } });
+    });
     await page.goto("/review");
-    await expect(page.getByRole("button", { name: /^Download appendix/ })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "Check your canvas" })).toBeVisible();
+    await expect(page.getByText("the priority, High, which is the one you chose")).toBeVisible();
+    await expect(page.getByRole("button", { name: /^Download/ })).toHaveCount(0); // nothing before confirming
 
-    // The real server knows this session's canvas is not complete, so it says no (and the page says so).
-    await chooseDownload(page, "Download appendix", "PDF");
-    await expect(page.getByRole("alert")).toContainText("The canvas is not complete yet");
+    await page.getByRole("button", { name: "Yes, this is correct" }).click();
+    await expect(page.getByRole("status")).toContainText("You confirmed this version");
 
-    // With a file coming back, the browser saves it under the fixed name (the content is tested on the server).
-    await page.route("**/api/appendix?*", (route) =>
-      route.fulfill({ status: 200, contentType: "application/octet-stream", body: "appendix-bytes" }),
-    );
-    for (const [label, ext] of [["PDF", "pdf"], ["Word (.docx)", "docx"], ["JSON", "json"]]) {
-      const [download] = await Promise.all([page.waitForEvent("download"), chooseDownload(page, "Download appendix", label)]);
-      expect(download.suggestedFilename()).toBe(`plan-on-a-page-appendix.${ext}`);
-      expect(readFileSync(await download.path(), "utf8")).toBe("appendix-bytes");
+    const files = [
+      ["Download canvas", "PDF", "canvas-file?format=pdf", "shift-notes-assistant-canvas-r3.pdf"],
+      ["Download canvas", "PowerPoint (.pptx)", "canvas-file?format=pptx", "shift-notes-assistant-canvas-r3.pptx"],
+      ["Download appendix", "PDF", "appendix?format=pdf", "shift-notes-assistant-appendix-r3.pdf"],
+      ["Download appendix", "Word (.docx)", "appendix?format=docx", "shift-notes-assistant-appendix-r3.docx"],
+      ["Download appendix", "JSON", "appendix?format=json", "shift-notes-assistant-appendix-r3.json"],
+    ];
+    for (const [menu, item, path, name] of files) {
+      await page.route(`**/api/${path}&revision=3`, (route) =>
+        route.fulfill({ status: 200, contentType: "application/octet-stream", headers: { "Content-Disposition": `attachment; filename="${name}"` }, body: "file-bytes" }),
+      );
+      const [download] = await Promise.all([page.waitForEvent("download"), chooseDownload(page, menu, item)]);
+      expect(download.suggestedFilename()).toBe(name);
+      expect(readFileSync(await download.path(), "utf8")).toBe("file-bytes");
     }
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
-  test("the canvas downloads as a PowerPoint file, which the server refuses until the canvas is complete", async ({ page }) => {
+  test("the real server refuses to confirm or make documents for a canvas that is not complete", async ({ page }) => {
     await signInAndWait(page);
-    await page.route("**/api/conversation", (route) => route.fulfill({ json: READY })); // the page believes it is ready
+    await mockDownloads(page, false, false);
+    // The page is told the canvas is ready and confirmed; the server, which knows better, says no.
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
     await page.goto("/review");
-    await chooseDownload(page, "Download canvas", "PowerPoint (.pptx)");
-    await expect(page.getByRole("alert")).toContainText("The canvas is not complete yet"); // the real server says no
+    await chooseDownload(page, "Download canvas", "PDF");
+    await expect(page.getByRole("alert")).toContainText("The canvas is not complete yet");
+    await chooseDownload(page, "Download appendix", "JSON");
+    await expect(page.getByRole("alert")).toContainText("The canvas is not complete yet");
 
-    await page.route("**/api/canvas-file?*", (route) => route.fulfill({ status: 200, contentType: "application/octet-stream", body: "deck-bytes" }));
-    const [download] = await Promise.all([page.waitForEvent("download"), chooseDownload(page, "Download canvas", "PowerPoint (.pptx)")]);
-    expect(download.suggestedFilename()).toBe("plan-on-a-page.pptx");
-    expect(readFileSync(await download.path(), "utf8")).toBe("deck-bytes");
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: null } }));
+    await page.reload();
+    await page.getByRole("button", { name: "Yes, this is correct" }).click();
+    await expect(page.getByRole("alert")).toContainText("The canvas is not complete yet"); // 422 from the real server
+  });
+
+  test("email: the form asks for the addresses, sends the confirmed revision, and says who it went to", async ({ page }) => {
+    await signInAndWait(page);
+    await mockDownloads(page, true, true);
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
+    let body: unknown = null;
+    await page.route("**/api/email", (route) => {
+      body = route.request().postDataJSON();
+      return route.fulfill({ json: { sent: 2 } });
+    });
+    await page.goto("/review");
+    await page.getByRole("button", { name: "Send email" }).click();
+    const form = page.locator(".mail");
+    await expect(form.getByRole("heading", { name: "Send by email" })).toBeVisible();
+    await expect(form.getByLabel("To")).toBeFocused();
+
+    await form.getByLabel("To").fill("not an address");
+    await form.getByRole("button", { name: "Send email" }).click();
+    await expect(form.getByRole("alert")).toContainText("check the email addresses");
+    expect(body).toBeNull(); // nothing went to the server
+
+    await form.getByLabel("To").fill("a@example.com, b@example.org");
+    await form.getByLabel(/^Message/).fill("Please take a look.");
+    await form.getByRole("button", { name: "Send email" }).click();
+    await expect(form.getByRole("status")).toContainText("Sent to a@example.com, b@example.org");
+    expect(body).toEqual({ revision: READY.revision, to: ["a@example.com", "b@example.org"], message: "Please take a look." });
+    await form.getByRole("button", { name: "Done" }).click();
+    await expect(page.locator(".mail")).toHaveCount(0);
+  });
+
+  test("email: the real server says plainly that email is not switched on, before it builds anything", async ({ page }) => {
+    await signInAndWait(page);
+    await mockDownloads(page, true, true);
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
+    await page.goto("/review");
+    await page.getByRole("button", { name: "Send email" }).click();
+    const form = page.locator(".mail");
+    await form.getByLabel("To").fill("someone@example.com");
+    await form.getByRole("button", { name: "Send email" }).click();
+    await expect(form.getByRole("alert")).toContainText("Email is not switched on yet"); // 503 email_unavailable
+    await expect(form.getByLabel("To")).toHaveValue("someone@example.com"); // nothing typed is lost
+  });
+
+  test("download status: each PDF is shown on its own, deleting stays locked until the server says both are done", async ({ page }) => {
+    await signInAndWait(page);
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
+    const card = page.locator(".dl");
+    const cases: Array<[boolean, boolean, string, string, string]> = [
+      [false, false, "Not downloaded yet", "Not downloaded yet", "the one-page canvas (PDF) and the appendix (PDF)"],
+      [true, false, "Downloaded", "Not downloaded yet", "the appendix (PDF)"],
+      [false, true, "Not downloaded yet", "Downloaded", "the one-page canvas (PDF)"],
+    ];
+    for (const [canvas, appendix, canvasText, appendixText, outstanding] of cases) {
+      await page.unroute("**/api/downloads");
+      await mockDownloads(page, canvas, appendix);
+      await page.goto("/review");
+      await expect(card.getByRole("heading", { name: "Your documents" })).toBeVisible();
+      await expect(card.locator("li", { hasText: "One-page canvas (PDF)" })).toContainText(canvasText);
+      await expect(card.locator("li", { hasText: "Appendix (PDF)" })).toContainText(appendixText);
+      await expect(card).toContainText(`Still to download: ${outstanding}.`);
+      await expect(page.getByRole("button", { name: /^Delete my session/ })).toHaveCount(0);
+    }
+    await expect(card).toContainText("It cannot check that the file was saved on your device");
+
+    await page.unroute("**/api/downloads");
+    await mockDownloads(page, true, true);
+    await page.goto("/review");
+    await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeVisible();
+    await expect(card).not.toContainText("Deleting is locked");
+  });
+
+  test("download status: a failed status check keeps deleting locked and can be retried", async ({ page }) => {
+    await signInAndWait(page);
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
+    await page.route("**/api/downloads", (route) => route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "x", correlation_id: "0".repeat(32) } } }));
+    await page.goto("/review");
+    await expect(page.locator(".dl").getByRole("alert")).toContainText("We could not check the download status");
+    await expect(page.getByRole("button", { name: /^Delete my session/ })).toHaveCount(0);
+    await page.unroute("**/api/downloads");
+    await mockDownloads(page, true, true);
+    await page.getByRole("button", { name: "Refresh status" }).click();
+    await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeVisible();
+  });
+
+  test("download status: the real server refuses to delete when its own gate is not satisfied, whatever the page shows", async ({ page }) => {
+    await signInAndWait(page);
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
+    await mockDownloads(page, true, true); // the page is told both are done; the real server knows better
+    await page.goto("/review");
+    await page.getByRole("button", { name: /^Delete my session/ }).click();
+    await page.getByRole("button", { name: "Yes, delete everything" }).click();
+    // A 409 from the real server (it has no such canvas): nothing is deleted, with fixed wording.
+    await expect(page.locator(".dl").getByRole("alert")).toContainText(/Deleting is still locked|The canvas changed since it was shown/);
+    await expect(page).toHaveURL(/\/review$/);
+    await page.request.get("/api/session").then((r) => expect(r.status()).toBe(200)); // still signed in: nothing was touched
+  });
+
+  test("deleting: after both PDFs, the user confirms and returns to entry with a plain notice", async ({ page }) => {
+    await signInAndWait(page);
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
+    await mockDownloads(page, true, true);
+    // After a real purge the session is gone; this stands in for that on the entry page.
+    await page.route("**/api/access-state", (route) => route.fulfill({ json: { start_permitted: false } }));
+    await page.route("**/api/session/purge", (route) => {
+      expect(route.request().postDataJSON()).toEqual({ revision: READY.revision });
+      return route.fulfill({ status: 204 });
+    });
+    await page.goto("/review");
+    await page.getByRole("button", { name: /^Delete my session/ }).click();
+    await expect(page.getByText(/cannot be recovered/)).toBeVisible();
+    await page.getByRole("button", { name: "Keep my session" }).click();
+    await expect(page.getByText(/cannot be recovered/)).toHaveCount(0);
+    await page.getByRole("button", { name: /^Delete my session/ }).click();
+    await page.getByRole("button", { name: "Yes, delete everything" }).click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("status")).toContainText("Your session was deleted");
   });
 
   test("prints to a single dark landscape page", async ({ page }) => {
@@ -499,6 +667,7 @@ test.describe("one-page canvas", () => {
     await expect(page.locator(".one-pager")).toBeVisible();
     await page.emulateMedia({ media: "print" });
     await expect(page.locator(".review-actions")).toBeHidden(); // buttons and chrome are not printed
+    await expect(page.locator(".readback")).toBeHidden();
     await expect(page.locator("header.layout__header")).toBeHidden();
     const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: true });
     expect((pdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) ?? []).length).toBe(1);

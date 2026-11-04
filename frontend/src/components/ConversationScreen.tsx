@@ -8,11 +8,27 @@ import {
   submitTurn,
 } from "../api/conversation";
 import { ApiError } from "../api/client";
+import {
+  ATTACHMENT_ACCEPT,
+  type Attachment,
+  MAX_ATTACHMENT_BYTES,
+  readAttachment,
+  splitAttachments,
+} from "../api/attachments";
 import { CanvasPanel } from "./CanvasPanel";
 import { navigate, ROUTES } from "../router";
 import { Loading } from "./Loading";
 
 const MAX_ANSWER_CHARS = 4000;
+
+// Fixed copy keyed on the error code: nothing the server says is shown.
+const ATTACH_MESSAGES: Record<string, string> = {
+  unsupported_file_type: "Only PDF, Word (.docx), PowerPoint (.pptx) and JSON files can be attached.",
+  file_too_large: `That file is too large. The limit is ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB.`,
+  file_unreadable: "That file could not be read. It may be damaged or password protected.",
+  file_has_no_text: "No text was found in that file. Scanned documents are not supported.",
+};
+const ATTACH_FAILED = "That file could not be attached. Please try again.";
 
 // Fixed copy chosen by error code. Nothing from a response body is ever shown.
 const SUBMIT_MESSAGES: Record<string, string> = {
@@ -52,6 +68,33 @@ function AssistantAvatar({ small }: { small?: boolean }) {
   );
 }
 
+function PaperclipIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" />
+    </svg>
+  );
+}
+
+// What was typed, plus each attached file folded away so a long file does not flood the chat.
+function TurnText({ text, user }: { text: string; user: boolean }) {
+  const { typed, files } = user ? splitAttachments(text) : { typed: text, files: [] };
+  return (
+    <>
+      {(typed || files.length === 0) && <p className="turn__text">{typed}</p>}
+      {files.map((file, index) => (
+        <details key={index} className="turn__file">
+          <summary>
+            Attached file: {file.name} ({file.text.length.toLocaleString("en-AU")} characters
+            {file.shortened ? ", shortened" : ""})
+          </summary>
+          <pre className="turn__file-text">{file.text}</pre>
+        </details>
+      ))}
+    </>
+  );
+}
+
 function UserAvatar() {
   return (
     <span className="avatar avatar--user" aria-hidden="true">
@@ -80,6 +123,13 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
 
   // One id per answer, kept across retries so the server can never record it twice.
   const submission = useRef<{ id: string; text: string } | null>(null);
+  const [attachment, setAttachment] = useState<Attachment | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  // What is sent: what was typed, then the attached file's text, as one answer.
+  const composed = attachment ? `${draft.trim() ? `${draft.trimEnd()}\n\n` : ""}${attachment.block}` : draft;
   const scrollRef = useRef<HTMLDivElement>(null);
   const followNewest = useRef(true); // false once the user scrolls up to re-read earlier messages
   const streamAbort = useRef<AbortController | null>(null);
@@ -160,10 +210,10 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
 
   async function send(event?: { preventDefault(): void }) {
     event?.preventDefault();
-    if (sending || !history || !draft.trim()) return;
+    if (sending || !history || !composed.trim()) return;
     // Same text => same id (a retry). Edited text => a new answer, so a new id.
-    if (!submission.current || submission.current.text !== draft) {
-      submission.current = { id: newSubmissionId(), text: draft };
+    if (!submission.current || submission.current.text !== composed) {
+      submission.current = { id: newSubmissionId(), text: composed };
     }
     followNewest.current = true;
     setSending(true);
@@ -173,11 +223,12 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
       const result = await submitTurn({
         submissionId: submission.current.id,
         expectedRevision: history.revision,
-        text: draft,
+        text: composed,
       });
       submission.current = null;
       if (mounted.current) {
         setDraft("");
+        setAttachment(null);
         setSaved(true);
       }
       await refresh();
@@ -189,6 +240,23 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
       if (mounted.current && apiError.status !== 401) setSubmitError(apiError);
     } finally {
       if (mounted.current) setSending(false);
+    }
+  }
+
+  async function attach(file: File | undefined) {
+    if (!file) return;
+    setAttaching(true);
+    setAttachError(null);
+    try {
+      const found = await readAttachment(file);
+      if (mounted.current) setAttachment(found);
+    } catch (error) {
+      const apiError = error instanceof ApiError ? error : new ApiError(null, "client_error", null);
+      if (apiError.status === 401) onAccessLost();
+      else if (mounted.current) setAttachError(ATTACH_MESSAGES[apiError.code] ?? ATTACH_FAILED);
+    } finally {
+      if (mounted.current) setAttaching(false);
+      if (fileInput.current) fileInput.current.value = ""; // so the same file can be chosen again
     }
   }
 
@@ -273,7 +341,7 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
                   {turn.role === "user" ? <UserAvatar /> : <AssistantAvatar />}
                   <div className="turn__bubble">
                     <span className="turn__who">{turn.role === "user" ? "You said" : "Assistant said"}</span>
-                    <p className="turn__text">{turn.text}</p>
+                    <TurnText text={turn.text} user={turn.role === "user"} />
                   </div>
                 </li>
               ))}
@@ -346,7 +414,54 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
               </div>
             )}
 
+            {attachment && (
+              <div className="attachment-chip">
+                <PaperclipIcon />
+                <span className="attachment-chip__name">{attachment.filename}</span>
+                <span className="attachment-chip__meta">
+                  {attachment.characters.toLocaleString("en-AU")} characters
+                  {attachment.truncated ? ", shortened to fit" : ""}
+                </span>
+                <button
+                  type="button"
+                  className="attachment-chip__remove"
+                  aria-label={`Remove ${attachment.filename}`}
+                  onClick={() => setAttachment(null)}
+                  disabled={sending}
+                >
+                  ×
+                </button>
+              </div>
+            )}
+            {attachment?.truncated && (
+              <p className="field__help">Only the first part of this file fits, so only that part will be sent.</p>
+            )}
+            {attachError && (
+              <p role="alert" className="notice">
+                {attachError}
+              </p>
+            )}
             <form onSubmit={(e) => void send(e)} className="answer-form composer">
+              <input
+                ref={fileInput}
+                type="file"
+                accept={ATTACHMENT_ACCEPT}
+                className="sr-only"
+                tabIndex={-1}
+                aria-hidden="true"
+                data-testid="file-input"
+                onChange={(e) => void attach(e.target.files?.[0])}
+              />
+              <button
+                type="button"
+                className="composer__attach"
+                aria-label="Attach a file (PDF, Word, PowerPoint or JSON)"
+                title="Attach a file"
+                onClick={() => fileInput.current?.click()}
+                disabled={blocked || attaching}
+              >
+                <PaperclipIcon />
+              </button>
               <label htmlFor="answer" className="sr-only">
                 {firstAnswer ? "Describe your idea" : "Your answer"}
               </label>
@@ -360,12 +475,14 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
                 placeholder={firstAnswer ? "Describe your idea in your own words…" : "Type your answer…"}
                 aria-describedby="answer-help"
               />
-              <button type="submit" disabled={blocked || !draft.trim()}>
+              <button type="submit" disabled={blocked || !composed.trim()}>
                 {sending ? "Sending…" : "Send"}
               </button>
             </form>
             <p id="answer-help" className="field__help">
-              Up to {MAX_ANSWER_CHARS} characters. Do not include passwords or personal details.
+              Up to {MAX_ANSWER_CHARS} characters. You can also attach one PDF, Word, PowerPoint or JSON file
+              (up to {MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB): its text is sent with your answer, as if you had typed
+              it. Do not include passwords or personal details.
             </p>
           </div>
         </section>

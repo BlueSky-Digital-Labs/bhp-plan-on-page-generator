@@ -6,13 +6,19 @@ Code: `backend/app/appendix/`, route: `backend/app/api/appendix.py`.
 
 ## Download
 
-`GET /api/appendix?format=pdf|docx|json` (the caller's own session; no CSRF token, it changes
-nothing). The file is built on every request from what the server has stored and is **never kept**.
+`GET /api/appendix?format=pdf|docx|json&revision=N` (the caller's own session; no CSRF token, it
+changes nothing). `revision` is required and must be the current, **confirmed** revision (see
+"Read-back and confirmation" below). The file is built on every request from what the server has
+stored and is **never kept**. The file name is the solution name, made safe, plus the kind and
+revision, for example `shift-notes-assistant-appendix-r12.pdf`.
 
 | | |
 | --- | --- |
 | `200` | The file, as an attachment named `plan-on-a-page-appendix.<ext>`, `Cache-Control: no-store`, and `X-Appendix-Revision` (the conversation revision it was built from). |
 | `409 canvas_not_ready` | The server's validator does not call the canvas ready (see below), or no interviewer is attached. |
+| `409 turn_in_progress` | The assistant has not finished replying, so the draft may be about to change. |
+| `409 not_confirmed` | The user has not confirmed this revision. |
+| `409 revision_conflict` | `revision` is not the current one (an answer arrived since it was shown), or one arrived while the file was being built. |
 | `409 conversation_changed` | An answer arrived while the copy was being taken twice in a row. Try again. |
 | `401` | No valid session. Another session's appendix can never be requested. |
 | `500 appendix_failed` | The file could not be rendered (logged without content). |
@@ -56,15 +62,38 @@ export built from it. The conversation revision and the draft are read together;
 moves while reading, it is read again, and after two attempts the request fails rather than mix
 two moments. Only a canvas the server calls ready can be exported.
 
-## The one-page canvas as PowerPoint
+## Read-back and confirmation
 
-The review screen also offers **Download canvas (PowerPoint)**: `GET /api/canvas-file?format=pptx`
-(`backend/app/canvas_export.py`) returns one 16:9 slide laid out and coloured like the on-screen
-canvas, as native editable shapes and text. It follows the same rules as the appendix: the
-caller's own session, only a canvas the server calls ready (`409 canvas_not_ready` otherwise),
-built per request and never kept. Text shrinks (down to 6 pt) to fit each panel; the slide was
-previewed with macOS Quick Look, not in PowerPoint itself, so open it once before relying on it.
-The PDF button is unchanged and still builds in the browser.
+Before any document, the review screen reads the whole canvas back ("Check your canvas": every
+field, "Not provided" for omitted optional ones, and the priority the user chose) and asks the
+user to confirm. Corrections go through the same conversation ("Something is wrong: go back and
+correct it"); there is no separate editor.
+
+* `POST /api/canvas/confirm` with `{"revision": N}` (session, same-origin check and CSRF token).
+  Only the revision the user was shown, and only while it is the current, complete one. It returns
+  the refreshed review (`revision`, `canvas`, `confirmed_revision`, ...). Errors: `422
+  canvas_incomplete` (a required field is missing), `409 revision_conflict` (stale),
+  `409 turn_in_progress`. The body accepts nothing else, so a priority cannot be supplied here.
+* The stamp is the conversation's existing `revision`, and the confirmation is one stored value,
+  `confirmed_revision`. It counts only while it equals `revision`. Any later answer moves
+  `revision` on, so it ends the confirmation at once; the user must read it back and confirm
+  again. No history of old versions is kept.
+* **Every document download requires the current, confirmed revision**, checked on the server,
+  and checked again just before the file is sent so an answer that arrived while it was built
+  cannot let an obsolete canvas through. The page shows the download buttons only for a confirmed
+  revision, and re-reads the review straight after any refusal.
+
+## The one-page canvas as PDF or PowerPoint
+
+`GET /api/canvas-file?format=pdf|pptx&revision=N` (`backend/app/canvas_export.py`). The **PDF is
+built on the server** (one A4 landscape page, vector text, drawn like the on-screen canvas), and the
+PowerPoint is one editable 16:9 slide. Same rules as the appendix: own session, confirmed current
+revision only, built per request in memory (no temporary files), never kept, `Cache-Control:
+no-store`, attachment with a safe file name. A render failure is a content-free `500` with
+guidance on screen and no file; the confirmation and the answers are untouched, so the user can
+retry. Text shrinks to fit each panel (down to 5.5 pt); if even that is not enough, the longest
+answers are cut with "…" (the whole answer is in the appendix) rather than spill off the page.
+The browser no longer builds the PDF.
 
 ## When the one-page canvas is offered
 
@@ -76,9 +105,19 @@ and no question is outstanding. The optional fields may be empty. Each required 
 on its own in `tests/interview/test_engine.py`. The **Generate canvas** button, the review page
 and the appendix all follow that one verdict.
 
+## Download status and deleting
+
+The canvas PDF and the appendix PDF are tracked separately, and the user may delete their session once
+both have been downloaded for the current version; see [downloads.md](downloads.md).
+
+## Sending by email
+
+The confirmed canvas and this appendix can also be emailed as two PDFs from the review page; see
+[email.md](email.md). It uses the same confirmation gate as the downloads.
+
 ## Limits
 
-* The PDF font is DejaVu Sans (`app/appendix/fonts/`, licence alongside): Latin, Greek and
+* The canvas PDF and the appendix PDF use DejaVu Sans (`app/appendix/fonts/`, licence alongside): Latin, Greek and
   Cyrillic and most punctuation are covered; scripts it lacks (for example Chinese) and emoji
   cannot be drawn in the PDF. The Word and JSON files keep every character.
 * The Word file was checked by parsing its XML and by opening it with macOS `textutil`, not in
