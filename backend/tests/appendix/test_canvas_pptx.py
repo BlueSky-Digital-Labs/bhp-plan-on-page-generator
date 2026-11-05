@@ -14,7 +14,7 @@ from tests.interview.test_interview_api import history, wire
 FIELDS = {
     "solutionName": "Shift Notes Assistant",
     "team": "Operations",
-    "priority": "High",
+    "priority": "Must-have",
     "opportunityTypes": ["Find Information", "Generate Reports"],
     "currentProcess": "Supervisors copy shift notes between three spreadsheets.",
     "painPoints": "It takes hours; details get lost. Zoë’s café — Ωmega, Привет",
@@ -59,7 +59,7 @@ def test_it_is_editable_text_and_shapes_not_a_picture():
 
 def test_the_selected_priority_and_opportunity_types_are_marked():
     text = slide_text(open_deck(render_canvas_pptx(FIELDS)).slides[0])
-    assert "■ High" in text and "□ Low" in text and "□ Strategic" in text
+    assert "■ Must-have" in text and "□ Nice-to-have" in text and "□ Exploratory" in text
     assert "■ Find Information" in text and "■ Generate Reports" in text
     assert "□ Predict Issues" in text and "□ Automate Workflows" in text
 
@@ -107,7 +107,7 @@ def test_long_answers_shrink_to_fit_the_panel_and_stay_readable_on_one_slide():
         for k in FIELDS
         if k not in ("priority", "opportunityTypes")
     }
-    long.update(priority="High", opportunityTypes=["Find Information"])
+    long.update(priority="Must-have", opportunityTypes=["Find Information"])
     deck = open_deck(render_canvas_pptx(long))
     assert len(deck.slides) == 1
     small, large = sizes(deck.slides[0]), sizes(open_deck(render_canvas_pptx(FIELDS)).slides[0])

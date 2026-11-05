@@ -222,6 +222,13 @@ must agree.
 
 ## Changing the model or profile
 
+*Moving from the small test model to the production model is this procedure.* Nothing in the
+application depends on the model's size: it extracts canvas fields and may propose the next
+question, and every proposal is checked (a model question is shown only if it passes the
+one-question checker, otherwise the reviewed template is used), so a stronger model changes quality,
+not the rules. What it needs is the evidence below for the exact production identifier, and nothing
+can be skipped by configuration. (The per-field question wording is in `prompts.py`, not the model.)
+
 Changing an identifier is **not** only a config edit. For every change of model,
 inference profile, or the destinations behind a profile (AWS can change these):
 

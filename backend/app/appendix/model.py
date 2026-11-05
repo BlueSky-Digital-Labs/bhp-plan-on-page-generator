@@ -85,6 +85,7 @@ class AppendixInput:
     summary: Summary
     sections: tuple[AnswerSection, ...]
     turns: tuple[QATurn, ...]
+    app_name: str = "Plan on a Page"  # from configuration; shown in the document title
 
     @property
     def included_turns(self) -> int:
@@ -164,7 +165,7 @@ def _summary(sections: tuple[AnswerSection, ...], turns: tuple[QATurn, ...]) -> 
     return Summary(tuple(facts), key_answers)
 
 
-def build_input(snapshot: ExportSnapshot) -> AppendixInput:
+def build_input(snapshot: ExportSnapshot, app_name: str = "Plan on a Page") -> AppendixInput:
     declined = frozenset(snapshot.declined)
     sections = tuple(
         AnswerSection(title, tuple(_answer(f, snapshot.canvas, declined) for f in fields))
@@ -176,7 +177,7 @@ def build_input(snapshot: ExportSnapshot) -> AppendixInput:
         QATurn(n, "user" if t.role == "user" else "assistant", clean_text(t.text))
         for n, t in enumerate(shown, start=1)
     )
-    return AppendixInput(snapshot.revision, _summary(sections, turns), sections, turns)
+    return AppendixInput(snapshot.revision, _summary(sections, turns), sections, turns, app_name)
 
 
 SPEAKER_LABELS = {"user": "User", "assistant": "Assistant"}

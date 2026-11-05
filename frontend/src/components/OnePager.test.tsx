@@ -10,7 +10,7 @@ const FULL: CanvasView = {
   fields: {
     solutionName: "Shift Notes Assistant",
     team: "Operations",
-    priority: "High",
+    priority: "Must-have",
     opportunityTypes: ["Find Information", "Generate Reports"],
     currentProcess: "Copy notes between spreadsheets",
     painPoints: "Takes hours",
@@ -74,7 +74,7 @@ describe("OnePager", () => {
         .getAllByRole("listitem")
         .filter((li) => li.textContent?.includes("(selected)"))
         .map((li) => li.textContent?.replace(" (selected)", ""));
-    expect(selected("Priority")).toEqual(["High"]);
+    expect(selected("Priority")).toEqual(["Must-have"]);
     expect(selected("Opportunity type")).toEqual(["Find Information", "Generate Reports"]);
     expect(within(screen.getByRole("list", { name: "Opportunity type" })).getAllByRole("listitem")).toHaveLength(6);
   });

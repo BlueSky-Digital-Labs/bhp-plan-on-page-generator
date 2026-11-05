@@ -163,12 +163,15 @@ def process(extraction, text, state=None):
 
 def test_a_priority_in_an_attached_file_is_never_taken_as_the_users_choice():
     attached = block(
-        "plan.docx", "docx", "Priority: High. This is a High priority idea.", truncated=False
+        "plan.docx",
+        "docx",
+        "Priority: Must-have. This is a Must-have priority idea.",
+        truncated=False,
     )
-    outcome = process(Extraction([update("priority", "High")]), attached)
+    outcome = process(Extraction([update("priority", "Must-have")]), attached)
     assert "priority" not in outcome.state.canvas  # only the user's own typing can choose it
-    typed = process(Extraction([update("priority", "High")]), "High\n\n" + attached)
-    assert typed.state.canvas["priority"] == "High"
+    typed = process(Extraction([update("priority", "Must-have")]), "Must-have\n\n" + attached)
+    assert typed.state.canvas["priority"] == "Must-have"
 
 
 def test_not_knowing_is_read_from_what_was_typed_not_from_a_file():

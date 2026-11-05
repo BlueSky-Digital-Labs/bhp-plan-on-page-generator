@@ -102,7 +102,7 @@ def test_the_email_names_the_canvas_lists_both_files_and_marks_the_senders_note(
     assert "“Shift Notes Assistant”" in out.body
     assert "idea-canvas-r3.pdf" in out.body and "idea-appendix-r3.pdf" in out.body
     assert "Message from the sender:\n\nPlease read before Friday." in out.body
-    assert out.body.rstrip().endswith("Sent from the Plan on a Page app.")
+    assert out.body.rstrip().endswith("Sent from Plan on a Page.")
 
 
 def test_no_note_means_no_note_heading():
@@ -177,3 +177,11 @@ def test_the_unavailable_mailer_never_sends_and_says_so():
     with pytest.raises(MailerError) as caught:
         mailer.send(OutgoingEmail(("a@example.com",), "s", "b", ()))
     assert caught.value.code == "unavailable"
+
+
+def test_the_configured_app_name_is_used_in_the_subject_and_body():
+    out = compose(("a@example.com",), "Idea", "", (PDF,), "Integrated Operations Plan")
+    assert out.subject == "Integrated Operations Plan: Idea"
+    assert "The canvas for “Idea” from Integrated Operations Plan is attached" in out.body
+    assert out.body.rstrip().endswith("Sent from Integrated Operations Plan.")
+    assert compose(("a@example.com",), " ", "", (PDF,), "Ops").subject == "Ops"

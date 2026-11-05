@@ -21,6 +21,7 @@ from app.interview.canvas import (
     Canvas,
     clean_value,
     missing_required,
+    priority_key,
 )
 from app.interview.prompts import (
     READY_TEXT,
@@ -301,7 +302,7 @@ class Interviewer:
             target is not None
             and target.field == "priority"
             and value in PRIORITIES
-            and str(value).casefold() in user_text.casefold()
+            and priority_key(str(value)) in priority_key(user_text)
         )
 
     @staticmethod

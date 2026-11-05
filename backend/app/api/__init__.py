@@ -4,6 +4,7 @@ from app.api import (
     access,
     appendix,
     attachments,
+    branding,
     canvas,
     conversation,
     downloads,
@@ -14,6 +15,7 @@ from app.api import (
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(health.router)
+api_router.include_router(branding.router)
 api_router.include_router(status.router)
 api_router.include_router(access.router)
 api_router.include_router(conversation.router)

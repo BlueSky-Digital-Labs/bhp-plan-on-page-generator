@@ -59,11 +59,15 @@ def ensure_still_confirmed(service: ConversationService, session: Session, revis
 
 
 def appendix_bytes(
-    service: ConversationService, session: Session, snapshot: ExportSnapshot, file_format: Format
+    service: ConversationService,
+    session: Session,
+    snapshot: ExportSnapshot,
+    file_format: Format,
+    app_name: str = "Plan on a Page",
 ) -> bytes:
     """The appendix file for a confirmed snapshot, with the AI overview when there is one."""
     try:
-        appendix = build_input(snapshot)
+        appendix = build_input(snapshot, app_name)
         overview = service.overview_for(session, appendix.source_revision, appendix.turns)
         if overview:
             summary = dataclasses.replace(appendix.summary, overview=overview)

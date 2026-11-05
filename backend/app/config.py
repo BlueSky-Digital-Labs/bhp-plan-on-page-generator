@@ -6,6 +6,7 @@ log line. In AWS, secret values come from Secrets Manager via the task role, not
 from the image or from any Vite build-time variable.
 """
 
+import re
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +16,9 @@ from pydantic import Field, SecretStr, ValidationError, ValidationInfo, field_va
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.mailer.message import is_address
+
+MAX_BRANDING_CHARS = 80
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 class AppEnv(StrEnum):
@@ -53,6 +57,12 @@ class Settings(BaseSettings):
     # without one.
     conversation_producer: Literal["unavailable", "test", "interviewer_bedrock"] = "unavailable"
 
+    # What the app calls itself on screen, in the browser tab, and in the appendix and the email.
+    # Read at startup and served to the page, so changing them needs a restart, not a rebuild.
+    app_name: str = Field(default="Plan on a Page", validate_default=True)
+    header_text: str = Field(default="Plan on a Page", validate_default=True)  # beside the logo
+    footer_text: str = Field(default="BHP", validate_default=True)
+
     # Emailing the canvas and appendix. "unavailable" sends nothing; "ses" uses Amazon SES from the
     # one verified sender address below; "test" accepts and discards (presentation tests only,
     # never when deployed). With "ses" an allow-list of recipient domains is required, so the app
@@ -85,6 +95,14 @@ class Settings(BaseSettings):
         if value == "test" and info.data.get("app_env") is AppEnv.DEPLOYED:
             raise ValueError("not allowed when deployed")
         return value
+
+    @field_validator("app_name", "header_text", "footer_text")
+    @classmethod
+    def _plain_short_text(cls, value: str) -> str:
+        text = re.sub(r"\s+", " ", value).strip()
+        if not text or len(text) > MAX_BRANDING_CHARS or _CONTROL.search(text):
+            raise ValueError(f"must be 1 to {MAX_BRANDING_CHARS} plain characters")
+        return text
 
     @field_validator("email_delivery")
     @classmethod

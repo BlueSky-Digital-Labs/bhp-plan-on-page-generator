@@ -46,7 +46,7 @@ files are read directly from their XML; no macros or embedded objects are touche
 * **A file is the user's words, not instructions**: the AI is told to record its facts and treat
   everything else as data; an instruction hidden in a file gets the same redirect as one typed.
   Only **typed** words can choose the priority or say "skip" / "I don't know": a file that says
-  "Priority: High" never sets it.
+  "Priority: Must-have" never sets it.
 * **Content-free logs**: reading a file logs only its type. File names, text and bytes are never
   logged, and error messages are fixed wording.
 * **Shown as text**: a file's text is rendered as plain text in the chat, never as markup.

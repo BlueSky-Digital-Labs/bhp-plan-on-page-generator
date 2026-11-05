@@ -31,7 +31,7 @@ def test_it_is_one_a4_landscape_page_with_every_answer_on_it():
 
 def test_the_selected_priority_and_opportunity_types_are_marked():
     text = text_of(read(FIELDS))
-    assert "■ High" in text and "□ Low" in text and "□ Strategic" in text
+    assert "■ Must-have" in text and "□ Nice-to-have" in text and "□ Exploratory" in text
     assert "■ Find Information" in text and "■ Generate Reports" in text
     assert "□ Predict Issues" in text and "□ Automate Workflows" in text
 
@@ -54,7 +54,7 @@ def test_it_uses_the_canvas_background_and_panel_colours():
 def test_long_answers_stay_on_one_page_and_are_never_dropped_silently():
     sentence = "A long answer sentence that keeps going and going. "
     long = {k: (sentence * 25)[:1000] for k in FIELDS if k not in ("priority", "opportunityTypes")}
-    long.update(priority="High", opportunityTypes=["Find Information"])
+    long.update(priority="Must-have", opportunityTypes=["Find Information"])
     reader = read(long)
     assert len(reader.pages) == 1
     assert "A long answer sentence" in text_of(reader)
