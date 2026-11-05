@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call: # deploy.yml runs these same checks before it deploys
 
 permissions:
   contents: read
@@ -40,6 +41,43 @@ jobs:
       - run: npm test
         working-directory: frontend
       - run: npm run build
+        working-directory: frontend
+
+  infra:
+    name: infra (CDK tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: infra/uv.lock
+      - run: uv sync --frozen
+        working-directory: infra
+      - run: uv run --frozen ruff check . && uv run --frozen ruff format --check .
+        working-directory: infra
+      # The tests synthesise the test and prod stacks, so this is also the `cdk synth` check.
+      - run: uv run --frozen pytest -q
+        working-directory: infra
+
+  # Reported, not blocking: a new advisory against an unchanged dependency should not fail an
+  # unrelated change. The deploy workflow's image scan is the blocking gate.
+  dependency-audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: pip-audit (backend lockfile, runtime dependencies)
+        run: |
+          uv export --frozen --no-dev --no-emit-project --no-hashes -o "$RUNNER_TEMP/backend.txt"
+          uvx pip-audit --requirement "$RUNNER_TEMP/backend.txt" --no-deps --disable-pip
+        working-directory: backend
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: npm audit (frontend runtime dependencies)
+        run: npm audit --omit=dev --audit-level=high
         working-directory: frontend
 
   browser-smoke:

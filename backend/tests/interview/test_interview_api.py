@@ -1,6 +1,8 @@
 import json
 import uuid
 
+import pytest
+
 from app.conversation.service import ConversationService
 from app.conversation.store import InMemoryConversationStore
 from app.interview.engine import ExtractionFailed, Interviewer, InterviewState
@@ -10,6 +12,8 @@ from app.interview.store import InMemoryInterviewStore
 from tests.access.conftest import SESSION_COOKIE, csrf
 from tests.conversation.conftest import events, submit
 from tests.interview.conftest import ANSWERS, OPENING, AnswerFiler, FakeExtractor, browser
+
+pytestmark = pytest.mark.usefixtures("store_kind")  # every test: in-memory, then DynamoDB (moto)
 
 
 def wire(world, extractor=None):

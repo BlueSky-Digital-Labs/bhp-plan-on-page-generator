@@ -151,6 +151,6 @@ screen with the scripted `test` producer; the guided interview itself needs the 
 * **Real-model checks**: the model path has not run live: no Bedrock smoke test, no review round of generated questions,
   and no prompt regression matrix beyond the templates and the stubbed-stream tests. Do these
   before enabling `interviewer_bedrock` anywhere real.
-* **Durable storage**: interview state is in process memory like the conversation store; deployed
-  runs fail closed until both have a durable store.
+* **Durable storage**: interview state is in process memory locally; deployed it is the `INTERVIEW`
+  item in the DynamoDB table (`DynamoInterviewStore`, [downloads.md](downloads.md)).
 * **Not built**: scoring, backlog submission, PDF, read-back confirmation, panel-sized writing.

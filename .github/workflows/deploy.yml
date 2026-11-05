@@ -1,0 +1,266 @@
+name: Deploy
+
+# Pushes to main deploy `test`. Run the workflow by hand to deploy `prod`, to deploy `test` from
+# another ref, or to redeploy an earlier image (rollback). Settings are GitHub Environment
+# variables, passed to CDK as context by scripts/cdk-run.sh. No AWS keys: the job assumes
+# plan-github-deploy-<env> through OIDC. See docs/deployment.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        type: choice
+        options: [test, prod]
+        default: test
+      image_tag:
+        description: >-
+          Rollback: deploy this existing image tag (a git SHA already in ECR) instead of
+          building the current commit. Skips CI, the build and the scan.
+        type: string
+        required: false
+  push:
+    # TEMPORARY: feature/aws-setup is listed so the pipeline can be tried from this branch (a manual
+    # run only works for a workflow that is already on the default branch). Remove it before merging.
+    branches: [main, feature/aws-setup]
+    paths-ignore:
+      - "**.md"
+      - docs/**
+
+permissions:
+  contents: read
+
+# One deployment per environment at a time. A running deployment is never cancelled: a
+# half-finished CloudFormation update is worse than a queued one.
+concurrency:
+  group: deploy-${{ inputs.environment || 'test' }}
+  cancel-in-progress: false
+
+env:
+  CDK_CLI_VERSION: 2.1147.0
+
+jobs:
+  ci:
+    if: ${{ inputs.image_tag == '' }}
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  deploy:
+    needs: ci
+    # Run when CI passed, or was skipped for a rollback. Never when it failed.
+    if: ${{ !cancelled() && (needs.ci.result == 'success' || needs.ci.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.environment || 'test' }}
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      ENVIRONMENT: ${{ inputs.environment || 'test' }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
+      # Empty means the default for the environment: minimal for test, full for prod.
+      PROFILE: ${{ vars.PROFILE }}
+      AVAILABILITY_ZONES: ${{ vars.AVAILABILITY_ZONES }}
+      VPC_ID: ${{ vars.VPC_ID }}
+      PUBLIC_SUBNET_IDS: ${{ vars.PUBLIC_SUBNET_IDS }}
+      CERTIFICATE_ARN: ${{ vars.CERTIFICATE_ARN }}
+      DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
+      HOSTED_ZONE_ID: ${{ vars.HOSTED_ZONE_ID }}
+      BEDROCK_MODEL_ID: ${{ vars.BEDROCK_MODEL_ID }}
+      BEDROCK_RESOURCE_ARNS: ${{ vars.BEDROCK_RESOURCE_ARNS }}
+      ALARM_EMAIL: ${{ vars.ALARM_EMAIL }}
+      MONTHLY_BUDGET_USD: ${{ vars.MONTHLY_BUDGET_USD }}
+      APP_NAME: ${{ vars.APP_NAME }}
+      HEADER_TEXT: ${{ vars.HEADER_TEXT }}
+      FOOTER_TEXT: ${{ vars.FOOTER_TEXT }}
+      WEB_DESIRED_COUNT: ${{ vars.WEB_DESIRED_COUNT }}
+      ENABLE_EMAIL: ${{ vars.ENABLE_EMAIL }}
+      SES_IDENTITY_ARN: ${{ vars.SES_IDENTITY_ARN }}
+      EMAIL_SENDER_ADDRESS: ${{ vars.EMAIL_SENDER_ADDRESS }}
+      EMAIL_ALLOWED_DOMAINS: ${{ vars.EMAIL_ALLOWED_DOMAINS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check settings and choose the image tag
+        id: plan
+        env:
+          ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          REQUESTED_TAG: ${{ inputs.image_tag }}
+        run: |
+          missing=()
+          [ -n "$ACCOUNT_ID" ] || missing+=(AWS_ACCOUNT_ID)
+          [ -n "$CERTIFICATE_ARN" ] || missing+=(CERTIFICATE_ARN)
+          if [ "$ENVIRONMENT" = prod ] && [ -z "$ALARM_EMAIL" ]; then missing+=(ALARM_EMAIL); fi
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Set these variables on the '$ENVIRONMENT' GitHub Environment: ${missing[*]}"
+            exit 1
+          fi
+          if [ "$ENVIRONMENT" = prod ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::prod deploys only from main (this run is on $GITHUB_REF)."
+            exit 1
+          fi
+          if [ -n "$REQUESTED_TAG" ]; then
+            [[ "$REQUESTED_TAG" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { echo "::error::image_tag has unexpected characters"; exit 1; }
+            tag=$REQUESTED_TAG build=false
+          else
+            tag=$GITHUB_SHA build=true
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=$tag" >> "$GITHUB_ENV"
+
+      # Built and scanned before any AWS call, and before infra/ gets a virtualenv, so a bad
+      # image fails fast and the Docker build context stays small.
+      - name: Build image
+        if: steps.plan.outputs.build == 'true'
+        run: docker build --pull --tag "plan-app:${IMAGE_TAG}" .
+
+      - name: SBOM (CycloneDX)
+        if: steps.plan.outputs.build == 'true'
+        # Pin to a commit SHA for stronger supply-chain protection.
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          image-ref: plan-app:${{ steps.plan.outputs.tag }}
+          format: cyclonedx
+          output: sbom.cdx.json
+          scan-type: image
+
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.build == 'true'
+        with:
+          name: sbom-${{ steps.plan.outputs.tag }}
+          path: sbom.cdx.json
+          retention-days: 90
+
+      - name: Scan image (fail on fixable HIGH or CRITICAL)
+        if: steps.plan.outputs.build == 'true'
+        uses: aquasecurity/trivy-action@v0.33.1
+        with:
+          image-ref: plan-app:${{ steps.plan.outputs.tag }}
+          scan-type: image
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      # How this workflow signs in to AWS. AWS_AUTH (Environment variable): empty or `oidc` assumes
+      # the short-lived deploy role over OIDC (recommended); `keys` uses the Environment secrets
+      # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (and AWS_SESSION_TOKEN if the keys are temporary).
+      - name: Check how to sign in to AWS
+        env:
+          AWS_AUTH: ${{ vars.AWS_AUTH }}
+          KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          case "${AWS_AUTH:-oidc}" in
+            oidc) ;;
+            keys)
+              [ -n "$KEY_ID" ] && [ -n "$KEY_SECRET" ] || {
+                echo "::error::AWS_AUTH=keys needs the Environment secrets AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+                exit 1
+              } ;;
+            *)
+              echo "::error::AWS_AUTH must be empty, oidc or keys"
+              exit 1 ;;
+          esac
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ vars.AWS_AUTH != 'keys' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/plan-github-deploy-${{ env.ENVIRONMENT }}
+          role-session-name: plan-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure AWS credentials (access keys)
+        if: ${{ vars.AWS_AUTH == 'keys' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Whichever way we signed in, never act on a different account than the one configured.
+      - name: Confirm the AWS account
+        env:
+          EXPECTED_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+        run: |
+          actual=$(aws sts get-caller-identity --query Account --output text)
+          [ "$actual" = "$EXPECTED_ACCOUNT" ] || {
+            echo "::error::the credentials are for a different AWS account than AWS_ACCOUNT_ID"
+            exit 1
+          }
+          echo "Signed in to AWS account $actual"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: infra/uv.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global "aws-cdk@${CDK_CLI_VERSION}"
+      - run: uv sync --frozen
+        working-directory: infra
+
+      - name: Deploy foundation (table, secrets, key, ECR, logs)
+        run: scripts/cdk-run.sh deploy "$ENVIRONMENT" foundation --require-approval never
+
+      - name: Push image to ECR
+        env:
+          BUILD: ${{ steps.plan.outputs.build }}
+          ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+        run: |
+          repo="plan-${ENVIRONMENT}"
+          registry="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          if aws ecr describe-images --repository-name "$repo" --image-ids "imageTag=${IMAGE_TAG}" > /dev/null 2>&1; then
+            echo "Image ${repo}:${IMAGE_TAG} is already in ECR (tags are immutable); not pushing again."
+          elif [ "$BUILD" != true ]; then
+            echo "::error::${repo}:${IMAGE_TAG} is not in ECR, so it cannot be rolled back to."
+            exit 1
+          else
+            aws ecr get-login-password --region "$AWS_REGION" \
+              | docker login --username AWS --password-stdin "$registry"
+            docker tag "plan-app:${IMAGE_TAG}" "${registry}/${repo}:${IMAGE_TAG}"
+            docker push "${registry}/${repo}:${IMAGE_TAG}"
+          fi
+
+      - name: Deploy service (network, ALB, WAF, web, sweeper, alarms)
+        run: scripts/cdk-run.sh deploy "$ENVIRONMENT" service --require-approval never
+
+      - name: Smoke test
+        id: smoke
+        run: |
+          out() {
+            aws cloudformation describe-stacks --stack-name "plan-${ENVIRONMENT}-service" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text
+          }
+          alb=$(out AlbDnsName)
+          if [ -n "$DOMAIN_NAME" ] && [ -n "$HOSTED_ZONE_ID" ]; then
+            url="https://${DOMAIN_NAME}"
+            scripts/smoke-test.sh "$url"
+          else
+            # No managed DNS record: reach the ALB by its own name. Its certificate is for another
+            # name, so verification is skipped for this one health check only.
+            url="https://${alb}"
+            scripts/smoke-test.sh "$url" --insecure
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: ${{ always() }}
+        env:
+          URL: ${{ steps.smoke.outputs.url }}
+          SMOKE: ${{ steps.smoke.outcome }}
+        run: |
+          {
+            echo "### Deploy ${ENVIRONMENT}"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Image tag | \`${IMAGE_TAG}\` |"
+            echo "| URL | ${URL:-not reached} |"
+            echo "| Smoke test | ${SMOKE} |"
+            echo "| Rollback | run this workflow with image_tag set to an earlier SHA |"
+          } >> "$GITHUB_STEP_SUMMARY"

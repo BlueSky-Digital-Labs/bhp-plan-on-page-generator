@@ -123,5 +123,5 @@ The confirmed canvas and this appendix can also be emailed as two PDFs from the 
 * The Word file was checked by parsing its XML and by opening it with macOS `textutil`, not in
   Microsoft Word itself.
 * Public delivery beyond this download, amendments by revision (feature 15) and a permanent
-  appendix store are not built. Like the conversation, it needs the durable store before it works
-  when deployed (the deployed conversation store fails closed).
+  appendix store are not built. The appendix is built from the stored conversation, which is in
+  DynamoDB when deployed.

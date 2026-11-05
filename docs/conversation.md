@@ -54,10 +54,9 @@ demos. It is **refused when `APP_ENV=deployed`**.
 
 ## Not production-ready yet (release dependencies)
 
-* **Durable storage.** Turns are held in process memory (local and test). When deployed, the
-  conversation API **fails closed with `503`** until a durable store (DynamoDB, as for
-  sessions) is added behind `ConversationStore`; per-process memory behind a load balancer
-  would lose or split transcripts. Sign-out and the rest of the app still work.
+* **Durable storage.** Turns are held in process memory locally and in tests. Deployed, they are in
+  the one DynamoDB table (`DynamoConversationStore`, see [downloads.md](downloads.md)); it has been
+  tested against a simulated DynamoDB, not yet against AWS.
 * **A real producer.** Until feature 11 attaches the interviewer, deployed replies are
   `failed / unavailable`.
 

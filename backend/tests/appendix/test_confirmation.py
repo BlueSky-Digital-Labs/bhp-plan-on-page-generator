@@ -13,6 +13,9 @@ from tests.appendix.test_canvas_pptx import canvas_file
 from tests.interview.conftest import OPENING, browser
 from tests.interview.test_interview_api import answer_for, history, say, submit, wire
 
+pytestmark = pytest.mark.usefixtures("store_kind")  # every test: in-memory, then DynamoDB (moto)
+
+
 DOCUMENTS = [
     ("canvas pdf", lambda c, r=None: canvas_file(c, "pdf", r)),
     ("canvas pptx", lambda c, r=None: canvas_file(c, "pptx", r)),

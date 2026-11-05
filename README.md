@@ -12,7 +12,7 @@ access-code rotation runbook. The conversation screen and its turn/stream API ar
 backend/    FastAPI app (app/), pytest tests, uv project (pyproject.toml + uv.lock)
 frontend/   Vite + React + TypeScript, Vitest tests, Playwright smoke checks (e2e/)
 Dockerfile  Multi-stage build, non-root runtime, same-origin serving
-docs/       frontend-contract.md, bedrock.md, access-control.md, conversation.md, interview.md, appendix.md, attachments.md, email.md, downloads.md, expiry.md, branding.md
+docs/       frontend-contract.md, bedrock.md, access-control.md, conversation.md, interview.md, appendix.md, attachments.md, email.md, downloads.md, expiry.md, branding.md, deployment.md
 ```
 
 Requires [uv](https://docs.astral.sh/uv/) (it installs Python 3.13 itself) and Node 22+

@@ -5,25 +5,23 @@ from datetime import datetime
 from app.interview.engine import InterviewState, canvas_view, is_ready, progression_view
 
 
-class InMemoryInterviewStore:
-    """The interview state, per session. Local and test only, like the conversation store."""
+class InterviewStoreBase:
+    """What every interview store does with a session's state, whatever keeps it.
 
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._states: dict[str, tuple[InterviewState, datetime]] = {}
+    A store supplies `get`, `put` and `delete_session`; the views and the confirmation are the same
+    everywhere, so the in-memory and DynamoDB stores cannot differ in behaviour.
+    """
 
     def get(self, session_id: str) -> InterviewState:
-        with self._lock:
-            entry = self._states.get(session_id)
-            return copy.deepcopy(entry[0]) if entry else InterviewState()
+        raise NotImplementedError
 
     def put(
         self, session_id: str, state: InterviewState, expires_at: datetime, now: datetime
     ) -> None:
-        with self._lock:
-            # Sessions keep their original expiry; state for expired ones is dropped.
-            self._states = {k: v for k, v in self._states.items() if v[1] > now}
-            self._states[session_id] = (copy.deepcopy(state), expires_at)
+        raise NotImplementedError
+
+    def delete_session(self, session_id: str) -> None:
+        raise NotImplementedError
 
     def canvas_view(self, session_id: str) -> dict:
         return canvas_view(self.get(session_id))
@@ -49,6 +47,27 @@ class InMemoryInterviewStore:
         state = self.get(session_id)
         state.confirmed_revision = revision
         self.put(session_id, state, expires_at, now)
+
+
+class InMemoryInterviewStore(InterviewStoreBase):
+    """The interview state, per session. Local and test only, like the conversation store."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._states: dict[str, tuple[InterviewState, datetime]] = {}
+
+    def get(self, session_id: str) -> InterviewState:
+        with self._lock:
+            entry = self._states.get(session_id)
+            return copy.deepcopy(entry[0]) if entry else InterviewState()
+
+    def put(
+        self, session_id: str, state: InterviewState, expires_at: datetime, now: datetime
+    ) -> None:
+        with self._lock:
+            # Sessions keep their original expiry; state for expired ones is dropped.
+            self._states = {k: v for k, v in self._states.items() if v[1] > now}
+            self._states[session_id] = (copy.deepcopy(state), expires_at)
 
     def delete_session(self, session_id: str) -> None:
         with self._lock:
