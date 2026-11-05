@@ -70,6 +70,7 @@ def test_permissions_are_narrow(env):
         "ecr:PutImage",
         "ecr:DescribeImages",
         "ecr:DescribeImageScanFindings",
+        "ecr:StartImageScan",
         "cloudformation:DescribeStacks",
         "secretsmanager:DeleteSecret",
         "ssm:DeleteParameter",

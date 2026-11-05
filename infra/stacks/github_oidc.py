@@ -31,6 +31,7 @@ ECR_PUSH_PULL = [
     "ecr:PutImage",
     "ecr:DescribeImages",
     "ecr:DescribeImageScanFindings",
+    "ecr:StartImageScan",
 ]
 
 

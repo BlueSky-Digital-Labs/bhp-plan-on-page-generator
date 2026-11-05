@@ -220,9 +220,44 @@ jobs:
             exit 0
           fi
           repo="plan-${ENVIRONMENT}"
-          aws ecr wait image-scan-complete --repository-name "$repo" --image-id "imageTag=${IMAGE_TAG}"
-          counts=$(aws ecr describe-image-scan-findings --repository-name "$repo" \
-            --image-id "imageTag=${IMAGE_TAG}" --query 'imageScanFindings.findingSeverityCounts' --output json)
+          image="imageTag=${IMAGE_TAG}"
+          # The scan starts a little after the push, so look for it for about six minutes. If none has
+          # appeared after about a minute, ask ECR to start one.
+          findings=""
+          requested=false
+          for attempt in $(seq 1 36); do
+            if out=$(aws ecr describe-image-scan-findings --repository-name "$repo" --image-id "$image" --output json 2>&1); then
+              status=$(jq -r '.imageScanStatus.status // "UNKNOWN"' <<< "$out")
+              echo "attempt ${attempt}: scan status ${status}"
+              if [ "$status" = COMPLETE ]; then
+                findings=$out
+                break
+              fi
+              if [ "$status" = FAILED ]; then
+                echo "::error::the ECR scan failed: $(jq -r '.imageScanStatus.description // "no detail"' <<< "$out")"
+                exit 1
+              fi
+            elif grep -q ScanNotFoundException <<< "$out"; then
+              echo "attempt ${attempt}: no scan yet"
+              if [ "$attempt" -ge 6 ] && [ "$requested" = false ]; then
+                requested=true
+                if aws ecr start-image-scan --repository-name "$repo" --image-id "$image" > /dev/null 2>&1; then
+                  echo "Asked ECR to start a scan."
+                else
+                  echo "::warning::ECR would not start a scan (the registry may use enhanced scanning, or the role lacks ecr:StartImageScan)."
+                fi
+              fi
+            else
+              echo "::error::could not read the scan: ${out}"
+              exit 1
+            fi
+            sleep 10
+          done
+          if [ -z "$findings" ]; then
+            echo "::error::no completed ECR scan for ${repo}:${IMAGE_TAG} after about six minutes. Check the registry scanning setting (aws ecr get-registry-scanning-configuration), or set IMAGE_SCAN_FAIL_ON=none to skip this gate."
+            exit 1
+          fi
+          counts=$(jq -c '.imageScanFindings.findingSeverityCounts // {}' <<< "$findings")
           critical=$(jq -r '.CRITICAL // 0' <<< "$counts")
           high=$(jq -r '.HIGH // 0' <<< "$counts")
           echo "ECR scan: ${critical} critical, ${high} high (all severities: ${counts})"
