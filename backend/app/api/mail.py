@@ -18,6 +18,7 @@ from app.api.exports import (
 )
 from app.appendix import MEDIA_TYPES, AppendixError
 from app.canvas_export import render_canvas_pdf
+from app.config import Settings, get_settings
 from app.conversation.service import ConversationService
 from app.errors import ApiProblem
 from app.mailer import (
@@ -74,6 +75,7 @@ def send_email(
     session: Annotated[Session, Depends(current_session)],
     service: Annotated[ConversationService, Depends(get_conversation)],
     mail: Annotated[MailService, Depends(get_mail)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict:
     """Builds the canvas and appendix PDFs for the confirmed revision and emails them.
 
@@ -101,7 +103,7 @@ def send_email(
         except Exception as exc:  # noqa: BLE001 - never leak renderer detail or user text
             logger.error("canvas_render_failed", extra={"exception_type": type(exc).__name__})
             raise problem(AppendixError("render_failed")) from None
-        appendix_pdf = appendix_bytes(service, session, snapshot, "pdf")
+        appendix_pdf = appendix_bytes(service, session, snapshot, "pdf", settings.app_name)
         ensure_still_confirmed(service, session, body.revision)
         email = compose(
             recipients,
@@ -115,6 +117,7 @@ def send_email(
                     document_filename(snapshot, "appendix", "pdf"), appendix_pdf, MEDIA_TYPES["pdf"]
                 ),
             ),
+            settings.app_name,
         )
         try:
             mail.mailer.send(email)

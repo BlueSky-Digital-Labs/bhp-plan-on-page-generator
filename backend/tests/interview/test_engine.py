@@ -54,7 +54,7 @@ def test_a_rough_idea_progresses_through_validated_updates_to_ready_for_review()
     answer_everything(convo)
     view = canvas_view(convo.state)
     assert view["ready_for_review"] and view["missing_required"] == []
-    assert view["fields"]["priority"] == "High"
+    assert view["fields"]["priority"] == "Must-have"
     assert view["fields"]["opportunityTypes"] == ["Find Information", "Generate Reports"]
     assert convo.replies[-1] == READY_TEXT
     assert convo.state.target is None
@@ -141,7 +141,7 @@ def test_without_a_priority_or_opportunity_type_the_canvas_is_never_ready():
     assert set(canvas_view(state)["missing_required"]) == {"priority", "opportunityTypes"}
     state.canvas["opportunityTypes"] = ["Find Information"]
     assert choose_target(state) == Target("missing", "priority")  # the user's choice is requested
-    state.canvas["priority"] = "Low"
+    state.canvas["priority"] = "Nice-to-have"
     assert choose_target(state) == Target("probe", "priority")  # why Low? then the obligations
     state.probed.add("priority")
     assert choose_target(state) == Target("confirm", "data")  # obligations still outstanding
@@ -155,7 +155,7 @@ def test_priority_is_requested_not_scored_and_never_assigned_by_the_interviewer(
         convo.say(ANSWERS[convo.state.target.field])
     assert "priority" not in convo.state.canvas
     reply = convo.replies[-1]
-    assert "Low, Medium, High or Strategic" in reply  # the user is asked to choose
+    assert "Must-have, Nice-to-have or Exploratory" in reply  # the user is asked to choose
     assert "priority" in reply.lower() and reply.count("?") == 1
     for scoring_word in ("recommend", "should be", "score", "rate this"):
         assert scoring_word not in reply.lower()
@@ -166,7 +166,7 @@ def test_priority_is_requested_not_scored_and_never_assigned_by_the_interviewer(
 
 def test_a_model_proposed_priority_is_rejected_unless_it_is_the_users_explicit_choice():
     # Wrong moment: not asking about priority.
-    convo = Conversation(FakeExtractor(Extraction([update("priority", "High")])))
+    convo = Conversation(FakeExtractor(Extraction([update("priority", "Must-have")])))
     convo.say("Our idea is very important to the business.")
     assert "priority" not in convo.state.canvas
 
@@ -176,16 +176,16 @@ def test_a_model_proposed_priority_is_rejected_unless_it_is_the_users_explicit_c
         | {"opportunityTypes": ["Analyse Data"]},
         target=Target("missing", "priority"),
     )
-    convo = Conversation(FakeExtractor(Extraction([update("priority", "Low", "u1")])))
+    convo = Conversation(FakeExtractor(Extraction([update("priority", "Nice-to-have", "u1")])))
     convo.state = state
     convo.say("Hard to say, it feels fairly minor.")
     assert "priority" not in convo.state.canvas
 
     # The user explicitly chose.
-    convo = Conversation(FakeExtractor(Extraction([update("priority", "Strategic", "u1")])))
+    convo = Conversation(FakeExtractor(Extraction([update("priority", "Exploratory", "u1")])))
     convo.state = copy.deepcopy(state)
-    convo.say("Strategic, please.")
-    assert convo.state.canvas["priority"] == "Strategic"
+    convo.say("Exploratory, please.")
+    assert convo.state.canvas["priority"] == "Exploratory"
 
 
 @pytest.mark.parametrize(
@@ -501,7 +501,7 @@ def test_a_yes_to_an_ordinary_question_is_not_read_as_not_knowing(answer):
 
 def complete_state() -> InterviewState:
     canvas = {f: "answer" for f in REQUIRED_ORDER}
-    canvas["priority"], canvas["opportunityTypes"] = "High", ["Find Information"]
+    canvas["priority"], canvas["opportunityTypes"] = "Must-have", ["Find Information"]
     return InterviewState(
         canvas=canvas,
         confirmed={"data", "systems"},
@@ -553,3 +553,38 @@ def test_the_canvas_is_not_ready_while_a_question_is_outstanding():
     state = complete_state()
     state.target = Target("optional", "kpis")
     assert not is_ready(state)
+
+
+@pytest.mark.parametrize(
+    ("typed", "chosen"),
+    [
+        ("Must-have", "Must-have"),
+        ("I'd say it's a must have", "Must-have"),
+        ("nice to have", "Nice-to-have"),
+        ("Nice-to-have, I think", "Nice-to-have"),
+        ("exploratory", "Exploratory"),
+    ],
+)
+def test_the_three_priorities_are_understood_however_the_user_writes_them(typed, chosen):
+    state = InterviewState(
+        canvas={f: "x" for f in REQUIRED_ORDER if f != "priority"}
+        | {"opportunityTypes": ["Analyse Data"]},
+        target=Target("missing", "priority"),
+    )
+    convo = Conversation(FakeExtractor(Extraction([update("priority", chosen, "u1")])))
+    convo.state = state
+    convo.say(typed)
+    assert convo.state.canvas["priority"] == chosen
+
+
+@pytest.mark.parametrize("old", ["High", "Low", "Medium", "Strategic"])
+def test_the_old_priority_words_are_no_longer_accepted(old):
+    state = InterviewState(
+        canvas={f: "x" for f in REQUIRED_ORDER if f != "priority"}
+        | {"opportunityTypes": ["Analyse Data"]},
+        target=Target("missing", "priority"),
+    )
+    convo = Conversation(FakeExtractor(Extraction([update("priority", old, "u1")])))
+    convo.state = state
+    convo.say(old)
+    assert "priority" not in convo.state.canvas

@@ -33,7 +33,7 @@ describe("CanvasForm", () => {
     expect(progress()).toHaveTextContent(`${requiredText.length + 2} required fields remaining.`);
 
     await user.type(screen.getByLabelText("Solution Name"), "ROC assistant");
-    await user.click(screen.getByRole("radio", { name: "Strategic" }));
+    await user.click(screen.getByRole("radio", { name: "Exploratory" }));
     await user.click(screen.getByRole("checkbox", { name: "Generate Reports" }));
     expect(progress()).toHaveTextContent(`${requiredText.length - 1} required fields remaining.`);
 
@@ -45,7 +45,7 @@ describe("CanvasForm", () => {
     const user = userEvent.setup();
     render(<CanvasForm />);
     for (const f of requiredText) await user.type(screen.getByLabelText(f.label), "x");
-    await user.click(screen.getByRole("radio", { name: "Low" }));
+    await user.click(screen.getByRole("radio", { name: "Nice-to-have" }));
     await user.click(screen.getByRole("checkbox", { name: "Find Information" }));
     expect(progress()).toHaveTextContent("All required fields are complete.");
   });

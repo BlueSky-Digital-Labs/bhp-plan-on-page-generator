@@ -49,7 +49,7 @@ the enum).
 ## Rules the engine enforces (each has a test)
 
 * Only the 16 canvas ids (same as `frontend/src/canvas/fields.ts`); only the six opportunity
-  types; priority only Low/Medium/High/Strategic. Unsupported fields or values are **rejected,
+  types; priority only Must-have/Nice-to-have/Exploratory (typed as "must have" or "nice to have" is understood too). Unsupported fields or values are **rejected,
   never coerced**; one bad opportunity type rejects the whole update.
 * **Priority is only ever the user's explicit choice**: accepted only while the question being
   answered is the priority question *and* the user's message names that priority.
@@ -69,38 +69,42 @@ the enum).
 * Questions are checked (`validate_question`) for exactly one `?`, no list markers, no joined
   requests, no second question word, the selected target's topic, and no other topic's strong
   keywords. A model-written question that fails is never shown; the reviewed template is used.
-* **Questions are direct and about one field, in a colleague's voice** ("What makes the way it
-  works today painful or frustrating?"), with a short tip after some first asks ("A rough working
-  title is fine."). When an answer cannot be used, the follow-up shows how to answer with an
-  example, then asks again ("Tell me the biggest headache, like “it takes two hours and details
-  get lost”. What problem hurts most?").
+* **Questions are specific, lead with concrete things to think about, and ask about one field**
+  ("Which part of the way it works today causes the most problems, such as delays, mistakes or
+  rework?"). After a first ask a short **hint** shows how to answer well, with a synthetic example
+  ("Numbers help, like “two hours every shift” or “three errors a week”."). When an answer cannot
+  be used, the follow-up shows how to answer with an example, then asks again.
 * **Acknowledgements vary** ("Got it.", "That makes sense.", "Good to know.") and are picked from
   the turn number, so the same state always gives the same reply. The rule redirect and the
   contradiction question keep their exact wording.
 * **Opportunity type lists every option** (Find Information, Generate Reports, Predict Issues,
   Recommend Actions, Analyse Data, Automate Workflows) and says more than one is fine. A plain
   answer such as "write the handover report" is mapped to the matching option when it clearly fits.
-* **Priority gets one follow-up**: after the user chooses it, "Why does this deserve High
-  priority? A sentence or two is plenty." The reason is the business case, so it is kept in Business Impact (joined to
+* **Priority has three defined options**: Must-have, Nice-to-have or Exploratory, with a hint that
+  explains each (Must-have: the work really needs it; Nice-to-have: it helps but can wait;
+  Exploratory: worth testing first). The old Low/Medium/High/Strategic values are rejected.
+* **Priority gets one follow-up**: after the user chooses it, "Why did you give this idea the
+  priority “Must-have”? A sentence or two is plenty." The reason is the business case, so it is kept in Business Impact (joined to
   anything already there). Skipping it never blocks anything, and an answered Business Impact is
   not asked again later.
 
-## Prompts and questions (version `2026-11-04.3`)
+## Prompts and questions (version `2026-11-05.1`)
 
-`prompts.py` holds the extractor prompt, an ask and a follow-up for every field, the priority
-follow-up, the dedicated confirmations and the acknowledgements. Representative examples (plain language, no canvas
-labels needed):
+`prompts.py` holds the extractor prompt, an ask, a follow-up and a how-to-answer hint for every field,
+the priority follow-up, the dedicated confirmations and the acknowledgements. Representative examples:
 
-| Target | First ask | Follow-up if the answer could not be used |
+| Target | First ask (then a hint) | Follow-up if the answer could not be used |
 | --- | --- | --- |
-| Solution Name | What would you like to call this idea? (A rough working title is fine.) | A short name like “Shift Notes Assistant” works. What would you call it? |
-| Current Process | Could you walk me through how this work gets done today? | Think of the steps from start to finish, like “copy the notes into a spreadsheet, then email a summary”. How is it done today? |
-| Pain Points | What makes the way it works today painful or frustrating? | Tell me the biggest headache, like “it takes two hours and details get lost”. What problem hurts most? |
+| Current Process | Could you walk me through how this work gets done today, from the first step to the last? (Say who does each step and what they use.) | Think of the steps from start to finish, like “copy the notes into a spreadsheet, then email a summary”. How is it done today? |
+| Pain Points | Which part of the way it works today causes the most problems, such as delays, mistakes or rework? (Numbers help.) | Tell me the biggest headache, like “it takes two hours and details get lost”. What problem hurts most? |
+| Success | What is one change you would notice that tells you this is working? (Something you could see or count.) | Think of one change you'd notice, like “handover takes minutes and nothing is missed”. What would success look like? |
+| Data | What data or documents would it need to read, such as logs, reports or records? | Name the records or documents involved, like “shift logs and incident reports”. What data would it need? |
+| Risks | What risks or dependencies could stop this from working, such as approvals, sensitive information or other groups? | Name the one thing most likely to cause trouble, like “notes may contain sensitive details”. What risk worries you most? |
 | Opportunity type | What kind of help do you want from AI: Find Information, …, or Automate Workflows? (You can pick more than one.) | Pick whichever fits best, like “Find Information and Generate Reports”. Which of these fit: …? |
+| Priority | What priority would you give this idea: Must-have, Nice-to-have or Exploratory? (Must-have means the work really needs it, Nice-to-have means it helps but can wait, Exploratory means it is worth testing first.) | It's your call. Which priority fits: Must-have, Nice-to-have or Exploratory? |
+| Priority (follow-up) | Why did you give this idea the priority “Must-have”? (A sentence or two is plenty.) | |
+| Business Impact (optional) | What difference would this make for the business, in time saved, cost, safety or quality? | It's fine to say you don't know. Roughly, what would improve for the business? |
 | Data (confirmation) | I have “…” down as the data so far. Is there any other data it would need? | |
-| Priority | What priority would you give this idea: Low, Medium, High or Strategic? | It's your call. Which priority fits: Low, Medium, High or Strategic? |
-| Priority (follow-up) | Why does this deserve High priority? (A sentence or two is plenty.) | |
-| Business Impact (optional) | What difference would this make for the business, if you can say? | It's fine to say you don't know. Roughly, what would improve for the business? |
 
 Changing any wording means bumping `PROMPT_VERSION`; the tests check that every template passes
 the one-question checker. The templates hold only instructions and synthetic examples.

@@ -22,7 +22,7 @@ UNICODE = "Zoë’s “plan” — naïve café, Ωmega, Привет, 100% ≥ 
 FIELDS = {
     "solutionName": "Shift Notes Assistant",
     "team": "Operations",
-    "priority": "High",
+    "priority": "Must-have",
     "opportunityTypes": ["Find Information", "Generate Reports"],
     "currentProcess": "Supervisors copy notes between three spreadsheets.\nThen they email a summary.",
     "painPoints": UNICODE,
@@ -144,7 +144,7 @@ def test_json_carries_every_answer_in_full_and_the_whole_record_in_order():
     answers = {a["id"]: a for s in data["sections"] for a in s["answers"]}
     assert answers["data"]["value"] == FIELDS["data"]  # in full, not condensed
     assert answers["opportunityTypes"]["value"] == ["Find Information", "Generate Reports"]
-    assert answers["priority"]["value"] == "High"
+    assert answers["priority"]["value"] == "Must-have"
     assert answers["painPoints"]["value"] == UNICODE  # not escaped away
     assert [t["turn"] for t in data["conversation"]] == list(range(1, 61))
     assert data["included_turns"] == 60
@@ -271,7 +271,7 @@ def test_the_summary_reads_the_conversation_by_plain_counting_and_the_start_of_e
     appendix = build_input(snapshot())
     facts = dict(appendix.summary.facts)
     assert facts["Idea"] == "Shift Notes Assistant (Operations)"
-    assert facts["Priority"] == "High"
+    assert facts["Priority"] == "Must-have"
     assert facts["Opportunity types"] == "Find Information, Generate Reports"
     assert (
         facts["Conversation"]

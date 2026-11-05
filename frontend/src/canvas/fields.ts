@@ -2,7 +2,8 @@
 // Required for export: every field except Business Impact and Expected Value/KPIs,
 // plus at least one opportunity type.
 
-export const PRIORITIES = ["Low", "Medium", "High", "Strategic"] as const;
+// The user's own choice, and only ever one of these three (matches backend/app/interview/canvas.py).
+export const PRIORITIES = ["Must-have", "Nice-to-have", "Exploratory"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 
 export const OPPORTUNITY_TYPES = [

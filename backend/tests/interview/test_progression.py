@@ -72,13 +72,13 @@ def test_the_data_and_systems_pass_is_separate_and_cannot_be_bypassed_by_the_des
     ]
     everything.append(update("opportunityTypes", ["Find Information"]))
     convo = Conversation(
-        FakeExtractor(Extraction(everything), Extraction([update("priority", "High", "u2")]))
+        FakeExtractor(Extraction(everything), Extraction([update("priority", "Must-have", "u2")]))
     )
     convo.say("A complete description that already names the data and the systems.")
     assert view(convo)["data_and_systems_complete"] is False  # mentioned, but never confirmed
     assert convo.state.target.field == "priority"
-    convo.say("High")
-    assert convo.state.target.kind == "probe"  # why High? comes before the confirmations
+    convo.say("Must-have")
+    assert convo.state.target.kind == "probe"  # why that priority? comes before the confirmations
     convo.say("skip")
     assert convo.state.target.kind == "confirm" and convo.state.target.field == "data"
     assert view(convo)["phase"] == "data_and_systems"
@@ -101,12 +101,12 @@ def test_a_complete_description_still_goes_through_priority_confirmations_and_op
     ]
     facts.append(update("opportunityTypes", ["Analyse Data"]))
     convo = Conversation(
-        FakeExtractor(Extraction(facts), Extraction([update("priority", "High", "u2")]))
+        FakeExtractor(Extraction(facts), Extraction([update("priority", "Must-have", "u2")]))
     )
     convo.say("One long description that covers every answer except the priority.")
     assert view(convo)["validation"]["missing_required"] == ["priority"]  # nothing is re-asked
     asked = [(convo.state.target.kind, convo.state.target.field)]
-    convo.say("High")
+    convo.say("Must-have")
     while convo.state.target is not None:
         asked.append((convo.state.target.kind, convo.state.target.field))
         convo.say("It saves hours every week." if convo.state.target.kind == "probe" else "Yes.")
@@ -201,9 +201,9 @@ def test_after_the_priority_the_user_is_asked_why_once_and_the_reason_is_kept():
     convo = Conversation()
     convo.say(OPENING)
     finish_required(convo)
-    assert convo.state.canvas["priority"] == "High"
+    assert convo.state.canvas["priority"] == "Must-have"
     assert convo.state.target.kind == "probe"
-    assert "Why does this deserve High priority?" in convo.replies[-1]
+    assert "Why did you give this idea the priority “Must-have”?" in convo.replies[-1]
     assert view(convo)["outstanding_question"]["target"] == "priority"
     convo.say("Handover mistakes have caused safety incidents.")
     assert convo.state.canvas["businessImpact"] == "Handover mistakes have caused safety incidents."
@@ -233,6 +233,6 @@ def test_the_follow_up_marker_moves_only_when_the_question_is_stored():
     convo.say(OPENING)
     while convo.state.target.field != "priority":
         convo.say(ANSWERS[convo.state.target.field])
-    discarded = convo.interviewer.process(convo.state, "High", "u99", ("u99",))
+    discarded = convo.interviewer.process(convo.state, "Must-have", "u99", ("u99",))
     assert discarded.state.target.kind == "probe" and "priority" in discarded.state.probed
     assert "priority" not in convo.state.probed  # the live state is untouched until it is stored

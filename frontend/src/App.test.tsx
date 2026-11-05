@@ -31,6 +31,39 @@ afterEach(() => {
 
 const startButton = () => screen.queryByRole("button", { name: "Start a new canvas" });
 
+describe("configured names", () => {
+  const configured = () =>
+    json({ app_name: "Integrated Operations Plan on a Page", header_text: "Integrated Operations", footer_text: "BHP · Integrated Operations" });
+
+  it("shows the configured name in the header, the entry heading, the footer and the browser tab, with the BHP logo", async () => {
+    mockApi({ "GET /api/branding": configured, "GET /api/access-state": NOT_PERMITTED });
+    render(<App />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Integrated Operations Plan on a Page" })).toBeInTheDocument();
+    expect(screen.getByRole("banner")).toHaveTextContent("Integrated Operations");
+    expect(screen.getByRole("contentinfo")).toHaveTextContent("BHP · Integrated Operations");
+    expect(screen.getByRole("img", { name: "BHP" })).toHaveAttribute("src", "/bhp-logo.png");
+    expect(document.title).toBe("Integrated Operations Plan on a Page");
+  });
+
+  it("uses the default names if they cannot be read, and the app still works", async () => {
+    mockApi({ "GET /api/branding": () => envelope("service_unavailable", 503), "GET /api/access-state": NOT_PERMITTED });
+    render(<App />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Plan on a Page" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Access code")).toBeInTheDocument();
+    expect(document.title).toBe("Plan on a Page");
+  });
+
+  it("shows a configured name as plain text, never as markup", async () => {
+    mockApi({
+      "GET /api/branding": () => json({ app_name: "<img src=x onerror=alert(1)>", header_text: "<b>Ops</b>", footer_text: "BHP" }),
+      "GET /api/access-state": NOT_PERMITTED,
+    });
+    render(<App />);
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent("<img src=x onerror=alert(1)>");
+    expect(document.querySelector("header b, main img")).toBeNull();
+  });
+});
+
 describe("entry route /", () => {
   it("shows the access form to a visitor without access, and nothing protected", async () => {
     mockApi({ "GET /api/access-state": NOT_PERMITTED });
@@ -72,7 +105,7 @@ describe("entry route /", () => {
   });
 
   it("shows a safe, retryable error if the access check fails", async () => {
-    const { fn } = mockApi({
+    const { calls } = mockApi({
       "GET /api/access-state": [() => envelope("service_unavailable", 503, CID), NOT_PERMITTED],
     });
     render(<App />);
@@ -82,7 +115,7 @@ describe("entry route /", () => {
     expect(screen.queryByLabelText("Access code")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByLabelText("Access code")).toBeInTheDocument();
-    expect(fn).toHaveBeenCalledTimes(2);
+    expect(calls).toHaveLength(2);
   });
 });
 
@@ -93,7 +126,7 @@ describe("protected route /start", () => {
     mockApi({ "GET /api/access-state": () => pending });
     at("/start");
     render(<App />);
-    expect(screen.getByRole("status")).toHaveTextContent("Checking access");
+    expect(await screen.findByRole("status")).toHaveTextContent("Checking access");
     expect(startButton()).not.toBeInTheDocument();
     expect(screen.queryByText(/What you will do/)).not.toBeInTheDocument();
     answer(PERMITTED());
@@ -192,7 +225,7 @@ describe("conversation route", () => {
 });
 
 describe("review route (read-back, confirmation and downloads)", () => {
-  const FIELDS = { solutionName: "Shift Notes Assistant", team: "Ops", priority: "High", opportunityTypes: ["Analyse Data"] };
+  const FIELDS = { solutionName: "Shift Notes Assistant", team: "Ops", priority: "Must-have", opportunityTypes: ["Analyse Data"] };
   const review = (revision: number, confirmed: number | null) => () =>
     json({
       revision,
@@ -238,7 +271,7 @@ describe("review route (read-back, confirmation and downloads)", () => {
     expect(screen.getByRole("heading", { level: 1, name: /AI OPPORTUNITY CANVAS/ })).toBeInTheDocument();
     expect(screen.getByText("Shift Notes Assistant")).toBeInTheDocument();
     const readBack = screen.getByRole("heading", { name: "Check your canvas" }).parentElement!;
-    expect(readBack).toHaveTextContent("and for the priority, High, which is the one you chose");
+    expect(readBack).toHaveTextContent("and for the priority, Must-have, which is the one you chose");
     expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument();
     expect(menus()).toHaveLength(0);
   });

@@ -139,7 +139,7 @@ def test_a_model_cannot_slip_an_unsupported_opportunity_type_or_an_inferred_prio
         "update_canvas",
         patch(
             upd("opportunityTypes", ["Find Information", "Teleport"]),
-            upd("priority", "High"),
+            upd("priority", "Must-have"),
             upd("team", "Operations"),
         ),
     )
@@ -150,7 +150,7 @@ def test_a_model_cannot_slip_an_unsupported_opportunity_type_or_an_inferred_prio
 
 
 def test_the_model_may_not_set_priority_even_when_asked_about_it(config_b):
-    events = tool_events("tu-1", "update_canvas", patch(upd("priority", "Strategic")))
+    events = tool_events("tu-1", "update_canvas", patch(upd("priority", "Exploratory")))
     state = InterviewState(canvas={}, target=Target("missing", "priority"))
     outcome = run(interviewer(config_b, events)[0], state, user_text="I am not sure how it ranks.")
     assert "priority" not in outcome.state.canvas
