@@ -180,7 +180,12 @@ class ServiceStack(Stack):
 
         interface_services = {
             "BedrockRuntime": ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME,
-            "SecretsManager": ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
+            # The app reads its two secrets from one backend; only that one needs a path.
+            **(
+                {"Ssm": ec2.InterfaceVpcEndpointAwsService.SSM}
+                if cfg.parameter_store
+                else {"SecretsManager": ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER}
+            ),
             "Logs": ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
             "EcrApi": ec2.InterfaceVpcEndpointAwsService.ECR,
             "EcrDocker": ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER,
@@ -228,13 +233,31 @@ class ServiceStack(Stack):
             self.web_role.add_to_policy(
                 iam.PolicyStatement(sid="Cmk", actions=KMS_ACTIONS, resources=[f.key.key_arn])
             )
-        self.web_role.add_to_policy(
-            iam.PolicyStatement(
-                sid="AccessSecrets",
-                actions=["secretsmanager:GetSecretValue"],
-                resources=[f.access_code_secret.secret_arn, f.cookie_key_secret.secret_arn],
+        if cfg.parameter_store:
+            # Exactly two parameters, one action. A SecureString under the AWS-managed key needs
+            # no statement; one under the environment's key is covered by the Cmk statement.
+            self.web_role.add_to_policy(
+                iam.PolicyStatement(
+                    sid="AccessParameters",
+                    actions=["ssm:GetParameter"],
+                    resources=[
+                        self.format_arn(
+                            service="ssm",
+                            resource="parameter",
+                            resource_name=f"{self.prefix}/{name}",
+                        )
+                        for name in ("access-code-hash", "cookie-signing-key")
+                    ],
+                )
             )
-        )
+        else:
+            self.web_role.add_to_policy(
+                iam.PolicyStatement(
+                    sid="AccessSecrets",
+                    actions=["secretsmanager:GetSecretValue"],
+                    resources=[f.access_code_secret.secret_arn, f.cookie_key_secret.secret_arn],
+                )
+            )
         if cfg.bedrock_model_id:
             self.web_role.add_to_policy(
                 iam.PolicyStatement(
@@ -271,13 +294,17 @@ class ServiceStack(Stack):
 
     def _access_env(self) -> dict[str, str]:
         # Identifiers only. The app reads the secret values itself through its task role.
-        return {
+        env = {
             "APP_ENV": "deployed",
             "AWS_REGION": self.config.region,
             "SESSIONS_TABLE_NAME": self.foundation.table.table_name,
-            "ACCESS_CODE_HASH_SECRET_ID": f"{self.prefix}/access-code-hash",
-            "COOKIE_SIGNING_KEY_SECRET_ID": f"{self.prefix}/cookie-signing-key",
+            # Secret names, or (parameter store) parameter names with a leading slash.
+            "ACCESS_CODE_HASH_SECRET_ID": self.config.access_code_id,
+            "COOKIE_SIGNING_KEY_SECRET_ID": self.config.cookie_key_id,
         }
+        if self.config.parameter_store:
+            env["SECRETS_BACKEND"] = "parameterstore"  # Secrets Manager is the app's default
+        return env
 
     def _web_env(self) -> dict[str, str]:
         cfg = self.config

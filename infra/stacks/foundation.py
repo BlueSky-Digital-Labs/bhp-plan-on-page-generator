@@ -99,27 +99,33 @@ class FoundationStack(Stack):
             projection_type=dynamodb.ProjectionType.KEYS_ONLY,
         )
 
-        self.access_code_secret = secretsmanager.Secret(
-            self,
-            "AccessCodeHash",
-            secret_name=f"{prefix}/access-code-hash",
-            description="Argon2 hash of the access code. Set by scripts/set-access-secrets.sh.",
-            secret_string_value=SecretValue.unsafe_plain_text(ACCESS_CODE_PLACEHOLDER),
-            encryption_key=self.key,
-            removal_policy=RemovalPolicy.DESTROY,
-        )
-        self.cookie_key_secret = secretsmanager.Secret(
-            self,
-            "CookieSigningKey",
-            secret_name=f"{prefix}/cookie-signing-key",
-            description="HMAC key for the session and grant cookies. Generated, never shown.",
-            generate_secret_string=secretsmanager.SecretStringGenerator(
-                password_length=64,  # the app requires at least 32
-                exclude_punctuation=True,
-            ),
-            encryption_key=self.key,
-            removal_policy=RemovalPolicy.DESTROY,
-        )
+        # The parameter-store backend creates nothing here: CloudFormation cannot create a
+        # SecureString, so scripts/set-access-secrets.sh does and the destroy workflow removes
+        # them.
+        self.access_code_secret: secretsmanager.Secret | None = None
+        self.cookie_key_secret: secretsmanager.Secret | None = None
+        if not config.parameter_store:
+            self.access_code_secret = secretsmanager.Secret(
+                self,
+                "AccessCodeHash",
+                secret_name=f"{prefix}/access-code-hash",
+                description="Argon2 hash of the access code. Set by scripts/set-access-secrets.sh.",
+                secret_string_value=SecretValue.unsafe_plain_text(ACCESS_CODE_PLACEHOLDER),
+                encryption_key=self.key,
+                removal_policy=RemovalPolicy.DESTROY,
+            )
+            self.cookie_key_secret = secretsmanager.Secret(
+                self,
+                "CookieSigningKey",
+                secret_name=f"{prefix}/cookie-signing-key",
+                description="HMAC key for the session and grant cookies. Generated, never shown.",
+                generate_secret_string=secretsmanager.SecretStringGenerator(
+                    password_length=64,  # the app requires at least 32
+                    exclude_punctuation=True,
+                ),
+                encryption_key=self.key,
+                removal_policy=RemovalPolicy.DESTROY,
+            )
 
         self.repository = ecr.Repository(
             self,
@@ -140,8 +146,12 @@ class FoundationStack(Stack):
         CfnOutput(self, "RepositoryName", value=self.repository.repository_name)
         CfnOutput(self, "RepositoryUri", value=self.repository.repository_uri)
         CfnOutput(self, "SessionsTableName", value=self.table.table_name)
-        CfnOutput(self, "AccessCodeSecretName", value=f"{prefix}/access-code-hash")
-        CfnOutput(self, "CookieKeySecretName", value=f"{prefix}/cookie-signing-key")
+        if config.parameter_store:
+            CfnOutput(self, "AccessCodeHashParameter", value=config.access_code_id)
+            CfnOutput(self, "CookieSigningKeyParameter", value=config.cookie_key_id)
+        else:
+            CfnOutput(self, "AccessCodeSecretName", value=config.access_code_id)
+            CfnOutput(self, "CookieKeySecretName", value=config.cookie_key_id)
 
     def _log_group(self, construct_id: str, name: str) -> logs.LogGroup:
         return logs.LogGroup(

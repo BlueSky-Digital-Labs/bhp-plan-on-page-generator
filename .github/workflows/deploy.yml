@@ -61,6 +61,8 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
       # Empty means the default for the environment: minimal for test, full for prod.
       PROFILE: ${{ vars.PROFILE }}
+      # Empty means the profile default: parameterstore for minimal, secretsmanager for full.
+      SECRETS_BACKEND: ${{ vars.SECRETS_BACKEND }}
       AVAILABILITY_ZONES: ${{ vars.AVAILABILITY_ZONES }}
       VPC_ID: ${{ vars.VPC_ID }}
       PUBLIC_SUBNET_IDS: ${{ vars.PUBLIC_SUBNET_IDS }}

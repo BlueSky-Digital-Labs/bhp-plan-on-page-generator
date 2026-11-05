@@ -42,6 +42,8 @@ jobs:
       # CDK validates every setting before it will synthesise, so pass the same ones as Deploy.
       # Empty means the default for the environment: minimal for test, full for prod.
       PROFILE: ${{ vars.PROFILE }}
+      # Empty means the profile default: parameterstore for minimal, secretsmanager for full.
+      SECRETS_BACKEND: ${{ vars.SECRETS_BACKEND }}
       AVAILABILITY_ZONES: ${{ vars.AVAILABILITY_ZONES }}
       VPC_ID: ${{ vars.VPC_ID }}
       PUBLIC_SUBNET_IDS: ${{ vars.PUBLIC_SUBNET_IDS }}
@@ -135,9 +137,14 @@ jobs:
       - name: Destroy foundation
         run: scripts/cdk-run.sh destroy "$ENVIRONMENT" foundation --force
 
+      - name: Choose the secrets backend
+        id: backend
+        run: echo "backend=$(scripts/secrets-backend.sh "$ENVIRONMENT")" >> "$GITHUB_OUTPUT"
+
       # CloudFormation deletes a secret with a 30-day recovery window, which would block
       # recreating the same name on the next deploy. Purge both now.
       - name: Purge the deleted secrets
+        if: ${{ steps.backend.outputs.backend == 'secretsmanager' }}
         run: |
           for name in access-code-hash cookie-signing-key; do
             if ! err=$(aws secretsmanager delete-secret --secret-id "plan-${ENVIRONMENT}/${name}" \
@@ -145,6 +152,16 @@ jobs:
               echo "::warning::plan-${ENVIRONMENT}/${name} was not purged (the next deploy fails until it is): ${err}"
             fi
           done
+
+      # Parameter Store parameters are not CloudFormation resources, so the stacks never owned
+      # them: delete the two here. A parameter that is already gone is reported, not an error.
+      - name: Delete the Parameter Store parameters
+        if: ${{ steps.backend.outputs.backend == 'parameterstore' }}
+        run: |
+          result=$(aws ssm delete-parameters \
+            --names "/plan-${ENVIRONMENT}/access-code-hash" "/plan-${ENVIRONMENT}/cookie-signing-key" \
+            --query '{deleted: DeletedParameters, not_found: InvalidParameters}' --output json)
+          echo "Parameter Store, deleted and not found: ${result}"
 
       # Safety net: a Lambda-backed custom resource would leave a log group CloudFormation does
       # not own. The stacks currently have none, so this normally finds nothing. Best effort.

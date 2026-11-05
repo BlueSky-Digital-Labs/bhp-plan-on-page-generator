@@ -47,6 +47,10 @@ class Settings(BaseSettings):
 
     # Access control. These are identifiers (names/ARNs), not secret values. All three are
     # required when deployed so a misconfigured deployment fails at startup, not at first use.
+    # Where the two access secrets live: "secretsmanager" (the design) or "parameterstore", for an
+    # account whose policies deny Secrets Manager. With parameterstore the two *_secret_id settings
+    # are parameter names and start with "/".
+    secrets_backend: Literal["secretsmanager", "parameterstore"] = "secretsmanager"
     sessions_table_name: str | None = Field(default=None, validate_default=True)
     access_code_hash_secret_id: str | None = Field(default=None, validate_default=True)
     cookie_signing_key_secret_id: str | None = Field(default=None, validate_default=True)
@@ -94,6 +98,17 @@ class Settings(BaseSettings):
     def _no_test_producer_when_deployed(cls, value: str, info: ValidationInfo) -> str:
         if value == "test" and info.data.get("app_env") is AppEnv.DEPLOYED:
             raise ValueError("not allowed when deployed")
+        return value
+
+    @field_validator("access_code_hash_secret_id", "cookie_signing_key_secret_id")
+    @classmethod
+    def _parameter_names_start_with_a_slash(cls, value: str | None, info: ValidationInfo):
+        if (
+            value
+            and info.data.get("secrets_backend") == "parameterstore"
+            and not value.startswith("/")
+        ):
+            raise ValueError("must be a parameter name starting with / for parameterstore")
         return value
 
     @field_validator("app_name", "header_text", "footer_text")

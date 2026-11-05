@@ -65,8 +65,9 @@ that are missing):
 | `ACCESS_CODE_HASH_SECRET_ID` | Secrets Manager secret holding the Argon2 hash (plain `SecretString`). |
 | `COOKIE_SIGNING_KEY_SECRET_ID` | Secrets Manager secret holding the cookie-signing key (`SecretString`, at least 32 characters). |
 
-Secret **values** are never configuration: they live in Secrets Manager and are read
-through the workload role.
+Secret **values** are never configuration: they live in Secrets Manager (or, with
+`SECRETS_BACKEND=parameterstore`, as SecureString parameters in Systems Manager Parameter Store) and are
+read through the workload role.
 
 ### DynamoDB table
 

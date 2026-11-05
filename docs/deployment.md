@@ -22,7 +22,8 @@ Environment variable `PROFILE` (or `-c profile=...`) to override it.
 endpoints); the ALB exactly as in full (HTTPS 443 with your certificate, HTTP 80 redirect, 120 s
 idle timeout); **one** web task and the sweeper task, both in the public subnets with public IPs;
 the ECR repository; the same DynamoDB table (same keys, `expiry-index` and TTL: a test checks it
-against `backend/app/dynamo.py`); the two secrets; two log groups (7 days); the ECS cluster and
+against `backend/app/dynamo.py`); the two access secrets (in Parameter Store by default, see
+[Secrets backend](#secrets-backend-secrets-manager-or-parameter-store)); two log groups (7 days); the ECS cluster and
 service; the sweeper schedule (every 15 minutes); and the same four roles with the same
 least-privilege actions minus KMS. Every removal policy is still `DESTROY`.
 
@@ -32,7 +33,7 @@ least-privilege actions minus KMS. Every removal policy is still `DESTROY`.
 | --- | --- |
 | Private subnets, endpoints | Tasks have public IPs, so AWS API traffic (DynamoDB, Secrets Manager, Bedrock, ECR, logs) goes over the internet, not a private path. Tasks accept inbound traffic only from the ALB security group (port 8000) and send out only on 443 and DNS, but they are on the public internet. |
 | WAF | No managed rules and **no rate limit on the access code**: the shared code can be guessed by volume. Use a long code. |
-| Customer-managed KMS key | DynamoDB uses AWS-owned encryption, Secrets Manager and log groups AWS-managed or default encryption. Not a key you control or can audit. No `kms:` permission on any role. |
+| Customer-managed KMS key | DynamoDB uses AWS-owned encryption, the secrets and log groups AWS-managed or default encryption. Not a key you control or can audit. No `kms:` permission on any role. |
 | Second task, autoscaling | A task restart is a short outage. Nothing scales. |
 | Alarms, SNS, budget | Silence when something breaks. Set `ALARM_EMAIL` and they are created exactly as in full. |
 
@@ -61,7 +62,13 @@ the resources (your user, or the CloudFormation execution role) needs these serv
 * **DynamoDB**: create and delete a table with a global secondary index, enable TTL, tag.
 * **ECR**: create and delete a repository and its lifecycle policy; and, for whoever pushes the
   image, login and push to `plan-test`.
-* **Secrets Manager**: create, put value, tag and delete two secrets (`plan-test/*`).
+* **Parameter Store** (the minimal default): for whoever runs `scripts/set-access-secrets.sh` and
+  the Destroy workflow, `ssm:PutParameter`, `ssm:GetParameter` and `ssm:DeleteParameter(s)` on
+  `parameter/plan-test/*`, plus `kms:Encrypt` on the key only if `KMS_KEY_ID` is set. No
+  `secretsmanager:*` at all.
+* **Secrets Manager** (only with `SECRETS_BACKEND=secretsmanager`): create, put value, tag and
+  delete two secrets (`plan-test/*`). The shared account's SCPs deny `secretsmanager:CreateSecret`,
+  which is why Parameter Store is the minimal default.
 * **CloudWatch Logs**: create and delete two log groups, set retention, tag.
 * **ACM**: `acm:ImportCertificate` (only for the self-signed certificate below).
 * **CDK bootstrap**: if the account is already bootstrapped (qualifier `hnb659fds`), permission to
@@ -175,7 +182,7 @@ aws ecr get-login-password | docker login --username AWS --password-stdin "$REGI
 docker push "$REGISTRY/plan-test:$IMAGE_TAG"
 
 scripts/cdk-run.sh deploy test service --require-approval never
-scripts/set-access-secrets.sh test
+scripts/set-access-secrets.sh test        # creates the two SSM parameters (SecureString)
 aws cloudformation describe-stacks --stack-name plan-test-service \
   --query "Stacks[0].Outputs[?OutputKey=='ServiceUrl' || OutputKey=='AlbDnsName']"
 scripts/smoke-test.sh "https://<AlbDnsName>" --insecure
@@ -184,8 +191,36 @@ scripts/smoke-test.sh "https://<AlbDnsName>" --insecure
 Build on Apple silicon without `--platform linux/amd64` and the tasks will fail with an exec
 format error. To tear down: `IMAGE_TAG=destroy scripts/cdk-run.sh destroy test service --force`,
 then the same for `foundation`, then
-`aws secretsmanager delete-secret --force-delete-without-recovery` on both `plan-test/*` secrets
-(see "Rebuild from scratch"), then delete the imported certificate.
+`aws ssm delete-parameters --names /plan-test/access-code-hash /plan-test/cookie-signing-key`
+(the stacks do not own them; with `secretsmanager`, purge the two `plan-test/*` secrets instead,
+see "Rebuild from scratch"), then delete the imported certificate.
+
+## Secrets backend: Secrets Manager or Parameter Store
+
+CDK context `secrets_backend` (GitHub variable `SECRETS_BACKEND`) chooses where the access code
+hash and the cookie signing key live:
+
+| | `secretsmanager` | `parameterstore` |
+| --- | --- | --- |
+| Default for | `full` | `minimal` |
+| Names | `plan-<env>/access-code-hash`, `plan-<env>/cookie-signing-key` | `/plan-<env>/access-code-hash`, `/plan-<env>/cookie-signing-key` (leading slash) |
+| Created by | CloudFormation (hash starts as a placeholder, key is generated) | `scripts/set-access-secrets.sh`; CloudFormation cannot create a SecureString, so the foundation stack has **no** secret or parameter resource |
+| App setting | default | `SECRETS_BACKEND=parameterstore` on both containers; the two `*_SECRET_ID` variables hold the parameter names |
+| Web role | `secretsmanager:GetSecretValue` on the two secrets | `ssm:GetParameter` on exactly the two parameter ARNs, nothing else |
+| Removed by `cdk destroy` | yes (then purged by the Destroy workflow) | **no**: the Destroy workflow deletes the parameters |
+
+Either can be used with either profile. Use `parameterstore` when the account denies Secrets
+Manager: the shared test account's SCPs explicitly deny `secretsmanager:CreateSecret`
+(CloudFormation failed creating both secrets), while `ssm put-parameter --type SecureString` works.
+
+Trade-offs: the parameters are SecureStrings under the AWS-managed key `alias/aws/ssm` by default
+(set `KMS_KEY_ID=alias/plan-<env>` when running the script to use the full profile's own key, which
+the web role can already use). Standard parameters have no automatic rotation and no version
+recovery window like Secrets Manager's. The app reads them at run time (not ECS secret
+injection), so tasks start without them and the entry page answers `503` until they exist. The
+cookie key is created by the script **once** (an existing one is left alone), so deleting the
+parameters and rerunning the script ends all sessions. In the full profile the tasks reach SSM
+through an `ssm` interface endpoint, which replaces the `secretsmanager` one.
 
 ## What gets created (full profile)
 
@@ -201,13 +236,13 @@ environment is two stacks, `plan-<env>-foundation` and `plan-<env>-service`. A t
 | AWS WAF web ACL | `wafv2.CfnWebACL` (REGIONAL) + `CfnWebACLAssociation` | `service.py` `_waf` |
 | Application Load Balancer, listeners | `ApplicationLoadBalancer`, HTTPS 443, HTTP 80 redirect, `ApplicationTargetGroup` | `service.py` `_edge` |
 | VPC, public and private subnets | `ec2.Vpc` (2 AZs, no NAT, private subnets are `PRIVATE_ISOLATED`) | `service.py` `_network` |
-| VPC endpoints | 5 interface (`bedrock-runtime`, `secretsmanager`, `logs`, `ecr.api`, `ecr.dkr`) and 2 gateway (`dynamodb`, `s3`) | `service.py` `_network` |
+| VPC endpoints | 5 interface (`bedrock-runtime`, `secretsmanager` or `ssm`, `logs`, `ecr.api`, `ecr.dkr`) and 2 gateway (`dynamodb`, `s3`) | `service.py` `_network` |
 | Security groups | `AlbSg`, `TaskSg`, `EndpointSg` | `service.py` `_network` |
 | ECS cluster, web service | `ecs.Cluster`, `FargateService` + autoscaling, `FargateTaskDefinition` | `service.py` `_web_service` |
 | Expiry sweeper | `FargateTaskDefinition` (same image, command override) + `scheduler.CfnSchedule` + scheduler role | `service.py` `_sweeper` |
 | Sessions table | `dynamodb.Table` + `expiry-index` GSI | `foundation.py` |
 | Encryption key | `kms.Key` (rotation on, 7-day deletion window) | `foundation.py` |
-| Secrets | `secretsmanager.Secret` x2 | `foundation.py` |
+| Secrets | `secretsmanager.Secret` x2 (backend `secretsmanager`), or nothing: two SSM parameters made by the script (backend `parameterstore`) | `foundation.py` |
 | Image registry | `ecr.Repository` | `foundation.py` |
 | Logs | `logs.LogGroup` x2 (7 days, encrypted with the key) | `foundation.py` |
 | Roles | `WebTaskRole`, `SweeperTaskRole`, `ExecutionRole`, `SchedulerRole` | `service.py` `_roles`, `_sweeper` |
@@ -287,6 +322,7 @@ SNS, CloudWatch alarm, Budgets, autoscaling and Route 53 permissions are **full-
    | --- | --- | --- |
    | `AWS_AUTH` | no | `oidc` (default) or `keys`: how the workflow signs in to AWS. See "Signing in to AWS from GitHub". With `keys`, add the Environment **secrets** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and, for temporary keys, `AWS_SESSION_TOKEN` |
    | `IMAGE_SCAN_FAIL_ON` | no | `CRITICAL` (default), `HIGH` or `none`: what the ECR image scan gate fails on |
+   | `SECRETS_BACKEND` | no | `secretsmanager` or `parameterstore`. Empty: parameterstore for minimal, secretsmanager for full |
    | `PROFILE` | no | `full` or `minimal`. Empty: minimal for `test`, full for `prod`. Minimal with prod is refused |
    | `VPC_ID` | no | Minimal only: reuse this existing VPC instead of creating one (needs `PUBLIC_SUBNET_IDS`). For an account at its VPC quota |
    | `PUBLIC_SUBNET_IDS` | no | With `VPC_ID`: exactly two public subnets, comma separated |
@@ -331,8 +367,12 @@ SNS, CloudWatch alarm, Budgets, autoscaling and Route 53 permissions are **full-
    ```
    It asks for the code twice (hidden), hashes it with Argon2 using the backend's own library
    and stores only the hash. The code is never echoed, never on a command line, never in a
-   file. It needs `secretsmanager:PutSecretValue` on the secret and `kms:GenerateDataKey` and
-   `kms:Decrypt` on the environment's key. No restart is needed.
+   file. With `secretsmanager` it needs `secretsmanager:PutSecretValue` on the secret and
+   `kms:GenerateDataKey` and `kms:Decrypt` on the environment's key. With `parameterstore` it writes
+   the hash as a SecureString (overwriting), and creates `/plan-<env>/cookie-signing-key` only if
+   it does not exist (a random 60+ character value, never printed); it needs `ssm:PutParameter`
+   and `ssm:GetParameter` on `/plan-<env>/*`. The backend comes from `SECRETS_BACKEND` or the
+   profile, as in `scripts/secrets-backend.sh`. No restart is needed.
 3. **Confirm the emails.** SNS and AWS Budgets each send a confirmation to `ALARM_EMAIL`; alarms
    are silent until the SNS one is confirmed.
 4. **DNS**, if you did not give a hosted zone: create a CNAME/alias from the name to the
@@ -361,7 +401,8 @@ For when an environment should be wiped and recreated:
    disappears by itself and is the one expected leftover.
 2. **Actions, Deploy**, same environment.
 3. **Set the access code again** (`scripts/set-access-secrets.sh`). The cookie key is new, so
-   any old cookies are dead.
+   any old cookies are dead. (With `parameterstore` the Destroy workflow deleted the two
+   parameters, so the script creates both afresh.)
 
 All sessions and content are lost. That is the point of the design. The `plan-github-oidc`
 stack is not touched; an administrator removes it with `cdk destroy plan-github-oidc`.
@@ -387,10 +428,13 @@ task definition revision. The next deploy replaces it.
   and every pending grant at once** (each task notices within about a minute). Do it when a
   leak is suspected, or to end all sessions now.
   ```bash
-  openssl rand -base64 48 | tr -d '\n=+/' | aws secretsmanager put-secret-value \
-    --secret-id plan-<env>/cookie-signing-key --secret-string file:///dev/stdin
+  AWS_PROFILE=<profile> scripts/set-access-secrets.sh <env> --rotate-cookie-key
   ```
-  Do not change the CDK definition of either secret afterwards without checking
+  It asks you to type a confirmation, then asks for the access code again (re-enter the current
+  one) and replaces the key in whichever backend is in use. Without the flag an existing key is
+  never touched. With `secretsmanager` you can also run
+  `openssl rand -base64 48 | tr -d '\n=+/' | aws secretsmanager put-secret-value --secret-id plan-<env>/cookie-signing-key --secret-string file:///dev/stdin`.
+  With `secretsmanager`, do not change the CDK definition of either secret afterwards without checking
   `aws secretsmanager get-secret-value` metadata first: see "Not verified".
 
 ## Where to look when it fails
@@ -515,6 +559,15 @@ None of the following has been run. Treat each as a likely first-deploy surprise
   the hash is valid Argon2 and verifies, and the code appears nowhere in what `aws` receives). `file:///dev/stdin` is assumed to work with your AWS CLI.
 * The destroy workflow end to end, including the leftover Lambda log group removal and the
   tag-based check (the tagging API can lag; the script retries).
+* **Parameter Store backend** (the app side is being written separately): `ssm put-parameter
+  --cli-input-json file:///dev/stdin` reading a pipe (tested only against a stand-in `aws`, which
+  confirmed the JSON, the `Overwrite` flags, the key id and that the value is not in the
+  arguments); that the account's SCPs allow `ssm:PutParameter` with `--type SecureString` under
+  `alias/aws/ssm` as the probe suggests, and `ssm:GetParameter` from the task role; that the app
+  reads the parameter names the stacks pass; the `ssm` interface endpoint's private DNS in the full
+  profile; that the Destroy workflow's `ssm:DeleteParameters` is enough and that the leftover check
+  runs without `ssm:GetParameters`. The `SECRETS_BACKEND` environment variable is set only for
+  `parameterstore` (Secrets Manager is the app's default).
 * **Minimal profile** (never deployed either): tasks with public IPs pulling from ECR and reaching
   DynamoDB, Secrets Manager and Bedrock over the internet; the task security group's DNS rules
   (the VPC resolver is not filtered by security groups, so they are probably redundant); that

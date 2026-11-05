@@ -19,6 +19,7 @@ add() { # add <context key> <environment variable>
   if [ -n "$value" ]; then args+=(-c "$1=$value"); fi
 }
 add profile PROFILE
+add secrets_backend SECRETS_BACKEND
 add region AWS_REGION
 add availability_zones AVAILABILITY_ZONES
 add vpc_id VPC_ID

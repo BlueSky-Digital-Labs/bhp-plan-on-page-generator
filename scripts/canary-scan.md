@@ -99,6 +99,17 @@ Record the date, environment, the git SHA of the running image, the three canari
 output of every command above. **Privacy is proven for that build only when every "expect 0" is
 0 and every positive control was above 0.**
 
+## After the test: nothing left in Parameter Store
+
+The access code hash and cookie key are not session content, so the canary does not touch them. With
+the `parameterstore` backend they are SSM parameters that `cdk destroy` does not remove (the Destroy
+workflow does). After destroying the environment, confirm:
+
+```bash
+aws ssm get-parameters --names /plan-$ENV/access-code-hash /plan-$ENV/cookie-signing-key \
+  --query 'Parameters[].Name'          # expect []
+```
+
 ## What this does not cover
 
 * The DynamoDB TTL backstop (it can lag by days; the sweeper is the primary control).

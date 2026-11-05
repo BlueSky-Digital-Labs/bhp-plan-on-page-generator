@@ -72,6 +72,8 @@ def test_permissions_are_narrow(env):
         "ecr:DescribeImageScanFindings",
         "cloudformation:DescribeStacks",
         "secretsmanager:DeleteSecret",
+        "ssm:DeleteParameter",
+        "ssm:DeleteParameters",
         "tag:GetResources",
         "logs:DescribeLogGroups",
         "logs:DeleteLogGroup",
@@ -84,6 +86,8 @@ def test_permissions_are_narrow(env):
     assert f"stack/plan-{env}-foundation/*" in stack_arns
     assert f"stack/plan-{env}-service/*" in stack_arns
     assert f"secret:plan-{env}/*" in json.dumps(by_sid["PurgeOwnDeletedSecrets"]["Resource"])
+    params = json.dumps(by_sid["DeleteOwnParameters"]["Resource"])
+    assert f":parameter/plan-{env}/*" in params and params.count("parameter") == 1
     delete = json.dumps(by_sid["PurgeOwnLambdaLogGroups"]["Resource"])
     assert f"log-group:/aws/lambda/plan-{env}-*" in delete
     other = "prod" if env == "test" else "test"

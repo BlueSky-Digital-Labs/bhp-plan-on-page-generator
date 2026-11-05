@@ -3,8 +3,9 @@
 #
 #   scripts/verify-destroyed.sh <test|prod> [region]
 #
-# Needs cloudformation:DescribeStacks and tag:GetResources. The KMS key stays in its 7-day
-# pending-deletion window by design, and is reported, not counted as a failure.
+# Needs cloudformation:DescribeStacks and tag:GetResources (and optionally ssm:GetParameters).
+# The KMS key stays in its 7-day pending-deletion window by design, and is reported, not counted
+# as a failure.
 set -euo pipefail
 
 env_name=${1:?usage: verify-destroyed.sh <test|prod> [region]}
@@ -22,6 +23,24 @@ for stack in "plan-${env_name}-service" "plan-${env_name}-foundation"; do
     failed=1
   fi
 done
+
+# Parameter Store parameters (the parameterstore backend) are not owned by the stacks. Names only,
+# no decryption. A principal without ssm:GetParameters cannot check; that is reported, not failed.
+if out=$(aws ssm get-parameters --region "$region" \
+  --names "/plan-${env_name}/access-code-hash" "/plan-${env_name}/cookie-signing-key" \
+  --query 'Parameters[].Name' --output text 2>&1); then
+  if [ -n "$out" ]; then
+    echo "STILL PRESENT: Parameter Store parameters: ${out}" >&2
+    failed=1
+  else
+    echo "gone: no Parameter Store parameters"
+  fi
+elif grep -q AccessDenied <<<"$out"; then
+  echo "note: not allowed to look for Parameter Store parameters; check /plan-${env_name}/ by hand"
+else
+  echo "Could not check Parameter Store: ${out}" >&2
+  failed=1
+fi
 
 # Every resource is tagged Project=plan-on-a-page and Environment=<env> by the CDK app.
 # The tagging API lags behind deletions by a minute or two, so look again before failing.

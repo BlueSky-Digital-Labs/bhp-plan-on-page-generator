@@ -141,6 +141,23 @@ class GithubOidcStack(Stack):
             )
         )
 
+        # The Parameter Store backend's parameters are made by scripts/set-access-secrets.sh, not
+        # by CloudFormation, so the destroy workflow deletes them. Delete only, only these.
+        role.add_to_policy(
+            iam.PolicyStatement(
+                sid="DeleteOwnParameters",
+                actions=["ssm:DeleteParameter", "ssm:DeleteParameters"],
+                resources=[
+                    self.format_arn(
+                        service="ssm",
+                        region=config.region,
+                        resource="parameter",
+                        resource_name=f"plan-{env}/*",
+                    )
+                ],
+            )
+        )
+
         # Safety net: a Lambda-backed custom resource would leave a log group no stack owns. The
         # stacks currently have none.
         def log_group(name: str) -> str:

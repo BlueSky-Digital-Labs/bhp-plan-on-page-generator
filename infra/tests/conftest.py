@@ -15,7 +15,13 @@ BEDROCK_ARNS = (
     "arn:aws:bedrock:ap-southeast-4::foundation-model/example.model-v1:0"
 )
 # The existing tests describe the full design. env=test defaults to minimal, so say "full".
-BASE = {"env": "test", "profile": "full", "certificate_arn": CERT, "image_tag": "abc123"}
+BASE = {
+    "env": "test",
+    "profile": "full",
+    "secrets_backend": "secretsmanager",  # pinned: the minimal default is parameterstore
+    "certificate_arn": CERT,
+    "image_tag": "abc123",
+}
 MINIMAL = {k: v for k, v in BASE.items() if k != "profile"}  # env=test, so the default applies
 
 

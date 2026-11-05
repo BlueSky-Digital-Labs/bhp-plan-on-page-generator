@@ -14,6 +14,14 @@ profile                   foundation,    minimal for test,        `full` (the wh
                                                                   endpoints, WAF, KMS key, alarms
                                                                   or autoscaling). minimal with
                                                                   env=prod is an error.
+secrets_backend           foundation,    parameterstore for       Where the access code hash and
+                          service        minimal, secretsmanager  cookie key live: `secretsmanager`
+                                         for full                 (created by CloudFormation) or
+                                                                  `parameterstore` (SSM SecureString
+                                                                  parameters, created by
+                                                                  scripts/set-access-secrets.sh,
+                                                                  for accounts that deny
+                                                                  secretsmanager:CreateSecret).
 region                    all            ap-southeast-2           Deployment region.
 availability_zones        service        <region>a,<region>b      Exactly two zones. Explicit, so
                                                                   synth needs no AWS lookup.
@@ -77,6 +85,7 @@ from typing import Any
 
 ENVIRONMENTS = ("test", "prod")
 PROFILES = ("full", "minimal")
+SECRETS_BACKENDS = ("secretsmanager", "parameterstore")
 DEFAULT_REGION = "ap-southeast-2"
 DEFAULT_GITHUB_REPO = "BlueSky-Digital-Labs/bhp-plan-on-page-generator"
 MAX_BRANDING_CHARS = 80  # same limit as backend/app/config.py
@@ -151,6 +160,7 @@ class Config:
 
     env_name: str
     profile: str
+    secrets_backend: str
     region: str
     availability_zones: tuple[str, str]
     vpc_cidr: str
@@ -182,6 +192,27 @@ class Config:
         return self.profile == "minimal"
 
     @property
+    def parameter_store(self) -> bool:
+        return self.secrets_backend == "parameterstore"
+
+    @property
+    def access_code_id(self) -> str:
+        """What ACCESS_CODE_HASH_SECRET_ID holds: a parameter name (leading slash) or a secret."""
+        return (
+            f"/{self.prefix}/access-code-hash"
+            if self.parameter_store
+            else (f"{self.prefix}/access-code-hash")
+        )
+
+    @property
+    def cookie_key_id(self) -> str:
+        return (
+            f"/{self.prefix}/cookie-signing-key"
+            if self.parameter_store
+            else (f"{self.prefix}/cookie-signing-key")
+        )
+
+    @property
     def prefix(self) -> str:
         return f"plan-{self.env_name}"
 
@@ -210,6 +241,14 @@ class Config:
             raise ConfigError(f"context 'profile' must be one of: {', '.join(PROFILES)}")
         if profile == "minimal" and env_name == "prod":
             raise ConfigError("context 'profile=minimal' is for test only; prod must be full")
+
+        backend = _text(
+            get, "secrets_backend", "parameterstore" if profile == "minimal" else "secretsmanager"
+        )
+        if backend not in SECRETS_BACKENDS:
+            raise ConfigError(
+                f"context 'secrets_backend' must be one of: {', '.join(SECRETS_BACKENDS)}"
+            )
 
         certificate_arn = _required(get, "certificate_arn")
         match = _ACM_ARN.match(certificate_arn)
@@ -282,6 +321,7 @@ class Config:
         return cls(
             env_name=env_name,
             profile=profile,
+            secrets_backend=backend,
             region=region,
             availability_zones=(azs[0], azs[1]),
             vpc_cidr=_text(get, "vpc_cidr", "10.20.0.0/16") or "10.20.0.0/16",
