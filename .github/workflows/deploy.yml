@@ -80,7 +80,7 @@ jobs:
       EMAIL_SENDER_ADDRESS: ${{ vars.EMAIL_SENDER_ADDRESS }}
       EMAIL_ALLOWED_DOMAINS: ${{ vars.EMAIL_ALLOWED_DOMAINS }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Check settings and choose the image tag
         id: plan
@@ -110,38 +110,11 @@ jobs:
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "IMAGE_TAG=$tag" >> "$GITHUB_ENV"
 
-      # Built and scanned before any AWS call, and before infra/ gets a virtualenv, so a bad
-      # image fails fast and the Docker build context stays small.
+      # Built before any AWS call, and before infra/ gets a virtualenv, so a build failure is quick
+      # and the Docker build context stays small. It is scanned after the push (see the gate below).
       - name: Build image
         if: steps.plan.outputs.build == 'true'
         run: docker build --pull --tag "plan-app:${IMAGE_TAG}" .
-
-      - name: SBOM (CycloneDX)
-        if: steps.plan.outputs.build == 'true'
-        # Pin to a commit SHA for stronger supply-chain protection.
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: plan-app:${{ steps.plan.outputs.tag }}
-          format: cyclonedx
-          output: sbom.cdx.json
-          scan-type: image
-
-      - uses: actions/upload-artifact@v4
-        if: steps.plan.outputs.build == 'true'
-        with:
-          name: sbom-${{ steps.plan.outputs.tag }}
-          path: sbom.cdx.json
-          retention-days: 90
-
-      - name: Scan image (fail on fixable HIGH or CRITICAL)
-        if: steps.plan.outputs.build == 'true'
-        uses: aquasecurity/trivy-action@v0.33.1
-        with:
-          image-ref: plan-app:${{ steps.plan.outputs.tag }}
-          scan-type: image
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"
 
       # How this workflow signs in to AWS. AWS_AUTH (Environment variable): empty or `oidc` assumes
       # the short-lived deploy role over OIDC (recommended); `keys` uses the Environment secrets
@@ -166,7 +139,7 @@ jobs:
 
       - name: Configure AWS credentials (OIDC)
         if: ${{ vars.AWS_AUTH != 'keys' }}
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/plan-github-deploy-${{ env.ENVIRONMENT }}
           role-session-name: plan-deploy-${{ github.run_id }}
@@ -174,7 +147,7 @@ jobs:
 
       - name: Configure AWS credentials (access keys)
         if: ${{ vars.AWS_AUTH == 'keys' }}
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -193,11 +166,11 @@ jobs:
           }
           echo "Signed in to AWS account $actual"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           cache-dependency-glob: infra/uv.lock
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       - run: npm install --global "aws-cdk@${CDK_CLI_VERSION}"
@@ -224,6 +197,40 @@ jobs:
               | docker login --username AWS --password-stdin "$registry"
             docker tag "plan-app:${IMAGE_TAG}" "${registry}/${repo}:${IMAGE_TAG}"
             docker push "${registry}/${repo}:${IMAGE_TAG}"
+          fi
+
+      # The image scan uses ECR's own scan-on-push (set on the repository by the foundation stack), so
+      # no third-party scanner action runs in this job. It looks at what AWS can scan (OS packages, and
+      # the languages ECR supports) and is a gate, not a full software audit. IMAGE_SCAN_FAIL_ON
+      # (Environment variable): CRITICAL (default), HIGH (HIGH and CRITICAL) or none.
+      - name: Image scan gate
+        if: steps.plan.outputs.build == 'true'
+        env:
+          FAIL_ON: ${{ vars.IMAGE_SCAN_FAIL_ON }}
+        run: |
+          mode=${FAIL_ON:-CRITICAL}
+          case "$mode" in CRITICAL | HIGH | none) ;; *)
+            echo "::error::IMAGE_SCAN_FAIL_ON must be CRITICAL, HIGH or none"
+            exit 1 ;;
+          esac
+          if [ "$mode" = none ]; then
+            echo "::warning::The image scan gate is switched off (IMAGE_SCAN_FAIL_ON=none)."
+            exit 0
+          fi
+          repo="plan-${ENVIRONMENT}"
+          aws ecr wait image-scan-complete --repository-name "$repo" --image-id "imageTag=${IMAGE_TAG}"
+          counts=$(aws ecr describe-image-scan-findings --repository-name "$repo" \
+            --image-id "imageTag=${IMAGE_TAG}" --query 'imageScanFindings.findingSeverityCounts' --output json)
+          critical=$(jq -r '.CRITICAL // 0' <<< "$counts")
+          high=$(jq -r '.HIGH // 0' <<< "$counts")
+          echo "ECR scan: ${critical} critical, ${high} high (all severities: ${counts})"
+          {
+            echo "### Image scan (${repo}:${IMAGE_TAG})"
+            echo "Critical: ${critical}, High: ${high}. Gate: ${mode}."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$critical" -gt 0 ] || { [ "$mode" = HIGH ] && [ "$high" -gt 0 ]; }; then
+            echo "::error::the image has findings at or above ${mode}; not deploying it. See ECR, ${repo}, image ${IMAGE_TAG}."
+            exit 1
           fi
 
       - name: Deploy service (network, ALB, WAF, web, sweeper, alarms)

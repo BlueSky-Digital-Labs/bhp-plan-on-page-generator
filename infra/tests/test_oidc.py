@@ -69,6 +69,7 @@ def test_permissions_are_narrow(env):
         "ecr:CompleteLayerUpload",
         "ecr:PutImage",
         "ecr:DescribeImages",
+        "ecr:DescribeImageScanFindings",
         "cloudformation:DescribeStacks",
         "secretsmanager:DeleteSecret",
         "tag:GetResources",

@@ -67,7 +67,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # How this workflow signs in to AWS. AWS_AUTH (Environment variable): empty or `oidc` assumes
       # the short-lived deploy role over OIDC (recommended); `keys` uses the Environment secrets
@@ -92,7 +92,7 @@ jobs:
 
       - name: Configure AWS credentials (OIDC)
         if: ${{ vars.AWS_AUTH != 'keys' }}
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/plan-github-deploy-${{ env.ENVIRONMENT }}
           role-session-name: plan-destroy-${{ github.run_id }}
@@ -100,7 +100,7 @@ jobs:
 
       - name: Configure AWS credentials (access keys)
         if: ${{ vars.AWS_AUTH == 'keys' }}
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -119,11 +119,11 @@ jobs:
           }
           echo "Signed in to AWS account $actual"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           cache-dependency-glob: infra/uv.lock
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       - run: npm install --global "aws-cdk@${CDK_CLI_VERSION}"

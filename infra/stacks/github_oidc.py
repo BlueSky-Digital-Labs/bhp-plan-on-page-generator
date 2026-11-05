@@ -30,6 +30,7 @@ ECR_PUSH_PULL = [
     "ecr:CompleteLayerUpload",
     "ecr:PutImage",
     "ecr:DescribeImages",
+    "ecr:DescribeImageScanFindings",
 ]
 
 

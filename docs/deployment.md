@@ -286,6 +286,7 @@ SNS, CloudWatch alarm, Budgets, autoscaling and Route 53 permissions are **full-
    | Variable | Needed | Example / meaning |
    | --- | --- | --- |
    | `AWS_AUTH` | no | `oidc` (default) or `keys`: how the workflow signs in to AWS. See "Signing in to AWS from GitHub". With `keys`, add the Environment **secrets** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and, for temporary keys, `AWS_SESSION_TOKEN` |
+   | `IMAGE_SCAN_FAIL_ON` | no | `CRITICAL` (default), `HIGH` or `none`: what the ECR image scan gate fails on |
    | `PROFILE` | no | `full` or `minimal`. Empty: minimal for `test`, full for `prod`. Minimal with prod is refused |
    | `VPC_ID` | no | Minimal only: reuse this existing VPC instead of creating one (needs `PUBLIC_SUBNET_IDS`). For an account at its VPC quota |
    | `PUBLIC_SUBNET_IDS` | no | With `VPC_ID`: exactly two public subnets, comma separated |
@@ -313,11 +314,12 @@ SNS, CloudWatch alarm, Budgets, autoscaling and Route 53 permissions are **full-
 1. Push to `main` (deploys `test`), or run **Actions, Deploy, Run workflow** and pick the
    environment. The workflow:
    1. runs the CI checks (`ci.yml`), skipped only for a rollback;
-   2. builds the image (tagged with the full git SHA), writes a CycloneDX SBOM (uploaded as an
-      artifact, 90 days) and scans it with Trivy, **failing on fixable HIGH or CRITICAL**;
-   3. assumes `plan-github-deploy-<env>` through OIDC;
+   2. builds the image (tagged with the full git SHA);
+   3. signs in to AWS (`AWS_AUTH`: OIDC role or access keys) and checks the account matches;
    4. `cdk deploy plan-<env>-foundation`;
-   5. pushes the image to `plan-<env>` (skipped if that tag already exists: tags are immutable);
+   5. pushes the image to `plan-<env>` (skipped if that tag already exists: tags are immutable), then
+      **gates on ECR's own scan of it**: it fails on CRITICAL findings (`IMAGE_SCAN_FAIL_ON`: `CRITICAL`
+      by default, `HIGH` to also fail on HIGH, `none` to switch it off);
    6. `cdk deploy plan-<env>-service -c image_tag=<sha>`;
    7. smoke test: `GET /api/health` until 200 (30 tries, 10 s apart), then a job summary with
       the image tag and URL. With no `HOSTED_ZONE_ID` it uses the ALB's own name and skips
@@ -395,7 +397,7 @@ task definition revision. The next deploy replaces it.
 
 | Symptom | Look at |
 | --- | --- |
-| Workflow fails before AWS | The job log. Missing variable: the "Check settings" step names it. Trivy: lists the fixable CVEs. |
+| Workflow fails before AWS | The job log. Missing variable: the "Check settings" step names it. Image scan gate: the step prints the counts; the findings are in ECR, `plan-<env>`, under the image tag. |
 | `AccessDenied` assuming the role | `plan-github-oidc` deployed in this account? Environment name matches (`test`/`prod`)? Repo name in `github_repo`? |
 | `cdk deploy` fails | CloudFormation console, stack **Events** tab: the first `FAILED` row. |
 | Service deploy hangs, then rolls back | ECS console, service **Events** and a stopped task's **Stopped reason**. Typical: cannot pull the image (endpoints, tag missing), or the container exits at startup. |
@@ -422,7 +424,7 @@ in the `infra` job. To see what a deploy would change in a real account:
 
 CI also runs `pip-audit` on the backend lockfile and `npm audit --omit=dev --audit-level=high`
 on the frontend in a **non-blocking** job (a new advisory against unchanged code should not
-fail unrelated work; read its log). The Trivy scan in the Deploy workflow **is** blocking.
+fail unrelated work; read its log). The ECR image scan gate in the Deploy workflow **is** blocking (CRITICAL by default).
 A push to `main` runs CI twice (its own trigger and the Deploy workflow's call). Harmless.
 
 ## Cost notes
@@ -466,7 +468,15 @@ Estimates from memory of public prices, not from the AWS bill or calculator: che
    record client addresses and paths); add them deliberately if wanted.
 6. SNS topic is not encrypted with the key (EventBridge and CloudWatch alarms could not publish
    to it otherwise without extra key policy). Messages carry no content.
-7. Actions are pinned to major version tags (Trivy to an exact release), not commit SHAs.
+7. **No third-party scanner action, and every action is pinned to a commit.** The workflows used
+   `aquasecurity/trivy-action`; its tags (and those of `setup-trivy`) were hijacked in March 2026
+   (CVE-2026-33634), and its original tags were later deleted. The first run's Trivy install step failed
+   (cause not confirmed; it may be related). Trivy is gone from the pipeline. The image is scanned by ECR's scan-on-push instead
+   (what AWS can scan: OS packages and the languages it supports, so it is a gate, not a full audit),
+   and every remaining action (`checkout`, `setup-node`, `setup-uv`, `upload-artifact`,
+   `configure-aws-credentials`) is pinned to the exact commit its tag pointed at, with the tag in a
+   comment. Pins do not update themselves: bump them on purpose (for example with Dependabot).
+   **No SBOM is produced now** (it came from Trivy). Add one back from a source you trust.
 8. Availability zones default to `<region>a` and `<region>b`. If an account does not have both
    in the region, set `availability_zones`.
 
@@ -478,8 +488,8 @@ None of the following has been run. Treat each as a likely first-deploy surprise
   Budgets, EventBridge or IAM behaviour was observed. Only offline synthesis (CDK CLI
   2.1147.0 with `aws-cdk-lib` 2.275.0), `cfn-lint` and unit tests ran.
 * The GitHub workflows were only checked statically (`actionlint`, `shellcheck`). Not run on
-  GitHub: the OIDC assumption, `trivy-action`, the SBOM upload, environment variables reaching
-  the job, concurrency behaviour.
+  GitHub: the OIDC assumption, the ECR scan gate (`aws ecr wait image-scan-complete` and the findings
+  query), environment variables reaching the job, concurrency behaviour.
 * The deploy role's permissions are untested against a real `cdk deploy` (the CLI's bootstrap
   version check, asset publishing, reading outputs). A missing action will show as `AccessDenied`.
 * `/tmp` on Fargate: whether the ephemeral volume is writable by uid 10001 on a read-only root
