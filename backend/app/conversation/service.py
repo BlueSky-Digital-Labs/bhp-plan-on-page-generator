@@ -70,7 +70,9 @@ class ConversationService:
         deliveries: Any = None,
     ) -> None:
         self._store, self._producer, self._clock = store, producer, clock
-        self._deliveries = deliveries if deliveries is not None else InMemoryDeliveryStore()
+        self._deliveries = (
+            deliveries if deliveries is not None else InMemoryDeliveryStore(clock=clock)
+        )
         self._interview = interview  # optional: where the canvas draft lives
         self._summarizer = summarizer  # optional: writes the appendix overview
         self._overviews: dict[tuple[str, int], str] = {}  # (session, revision) -> overview

@@ -117,7 +117,22 @@ def _pdf(data: bytes) -> str:
 
 
 def _json(data: bytes) -> str:
-    return json.dumps(json.loads(data.decode("utf-8-sig")), ensure_ascii=False, indent=2)
+    """The file pretty-printed, but never more than twice the text that will be used.
+
+    Indenting makes the output grow with nesting depth, not with the file's size: a small, deeply
+    nested file would otherwise print to hundreds of times its own size (and a file at the size
+    limit to gigabytes) before anything could cut it. So the text is produced piece by piece and
+    production stops as soon as there is more than will be used, like the PDF reader does.
+    """
+    encoder = json.JSONEncoder(ensure_ascii=False, indent=2)
+    text: list[str] = []
+    size = 0
+    for piece in encoder.iterencode(json.loads(data.decode("utf-8-sig"))):
+        text.append(piece)
+        size += len(piece)
+        if size > MAX_ATTACHMENT_CHARS * 2:  # more than will be used: stop writing
+            break
+    return "".join(text)
 
 
 _READERS = {"pdf": _pdf, "docx": _docx, "pptx": _pptx, "json": _json}

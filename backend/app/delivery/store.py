@@ -6,8 +6,9 @@ query on the session, and expiring with the session. Nothing here reads another 
 """
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal, Protocol
 
 from app.access.errors import DependencyUnavailable
@@ -49,9 +50,14 @@ class DeliveryStore(Protocol):
 class InMemoryDeliveryStore:
     """Local and test only, like the other in-memory stores: lost on restart and not shared."""
 
-    def __init__(self, capacity: int = MAX_TRACKED_SESSIONS) -> None:
+    def __init__(
+        self,
+        capacity: int = MAX_TRACKED_SESSIONS,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
         self._lock = threading.Lock()
         self._capacity = capacity
+        self._clock = clock
         # session -> (records, session end)
         self._sessions: dict[str, tuple[dict[DocumentKind, Delivery], datetime]] = {}
 
@@ -64,8 +70,10 @@ class InMemoryDeliveryStore:
         expires_at: datetime,
     ) -> bool:
         with self._lock:
-            # Entries end with their session; a live one is never dropped to make room.
-            self._sessions = {k: v for k, v in self._sessions.items() if v[1] > completed_at}
+            # Entries end with their session; a live one is never dropped to make room. "Ended" is
+            # judged by the store's clock, not by the completion time of the write being recorded.
+            now = self._clock()
+            self._sessions = {k: v for k, v in self._sessions.items() if v[1] > now}
             if session_id not in self._sessions:
                 if len(self._sessions) >= self._capacity:
                     return False
