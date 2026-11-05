@@ -82,6 +82,31 @@ You do not need the `plan-github-oidc` stack or GitHub Environments to use minim
 hand as below. (The Deploy workflow works too if the account allows the OIDC provider and the two
 deploy roles.)
 
+### Required organisation tags
+
+The organisation's policies refuse to create resources without a set of tags (the DynamoDB and Secrets
+Manager denials were these policies). The tags live in one file, `infra/org-tags.json`:
+
+| Tag | Value |
+| --- | --- |
+| `created_by` | `nara@horizondigital.au` |
+| `approved_by` | `basit@horizondigital.au` |
+| `project_name` | `plan-on-a-page` |
+| `created_for` | `Client-Prototype` |
+| `cost_center` | `BHP-Prototype` |
+| `client` | `BHP` |
+
+`infra/app.py` applies them to every stack and, through CloudFormation, to every resource that can carry
+tags (the table, repository, log groups, roles, security groups, load balancer, VPC pieces, WAF and so on),
+next to the existing `Project` and `Environment` tags. `infra/tests/test_org_tags.py` checks all of them in
+every profile, and fails if a new taggable resource type appears that the list does not cover.
+`scripts/set-access-secrets.sh` reads the same file and tags the Parameter Store parameters when it creates
+them (AWS does not allow tags together with an overwrite, so an existing parameter is only overwritten).
+
+To change a value, edit the file and redeploy. The EventBridge Scheduler schedule cannot carry tags at all
+(CloudFormation gives it no tag property); if a policy demands tags on it, that is the one resource that
+would still be refused.
+
 ### Account already at its VPC quota: use an existing VPC
 
 A new account allows 5 VPCs and 5 internet gateways per region. If the shared account is full (check
@@ -299,9 +324,18 @@ SNS, CloudWatch alarm, Budgets, autoscaling and Route 53 permissions are **full-
    * model access granted and quota raised for the chosen model in the account;
    * an **approved selection** in `backend/app/ai/policy.py` with its evidence, following
      [bedrock.md](bedrock.md). The app refuses to start with `interviewer_bedrock` otherwise,
-     which would make every deployment fail its health check. Merge that change first;
+     which would make every deployment fail its health check. Merge that change first. Two
+     **test-only** entries are in the code now (Claude Sonnet 5.5 through `au.anthropic.claude-sonnet-5-5`
+     and `openai.gpt-oss-120b-1:0`, both for the shared test account and marked "not release
+     evidence"), so for that account only the variables below are needed, and switching between them is
+     just `BEDROCK_MODEL_ID`. Include both models' ARNs in `BEDROCK_RESOURCE_ARNS` to switch without an
+     IAM change;
    * the ARNs for `BEDROCK_RESOURCE_ARNS`: the Australian inference-profile ARN(s) plus the
-     underlying foundation-model ARN in each destination region, from your evidence.
+     underlying foundation-model ARN in each destination region, from your evidence. For the two
+     test-only models: `arn:aws:bedrock:ap-southeast-2:<account-id>:inference-profile/au.anthropic.claude-sonnet-5-5`,
+     `arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-sonnet-5-5`,
+     `arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.claude-sonnet-5-5` and
+     `arn:aws:bedrock:ap-southeast-2::foundation-model/openai.gpt-oss-120b-1:0`.
 5. **Deploy the GitHub trust stack once** (administrator, by hand):
    ```bash
    cd infra && npx aws-cdk@2.1147.0 deploy plan-github-oidc

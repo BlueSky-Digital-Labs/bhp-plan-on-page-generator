@@ -34,9 +34,51 @@ def codes(config, registry=REGISTRY):
     return excinfo.value
 
 
-def test_production_registry_is_empty_until_verified():
-    assert APPROVED_SELECTIONS == ()
-    assert codes(cfg(), None).codes == ("unapproved_model",)
+def test_production_registry_holds_only_the_two_test_only_entries():
+    """A tripwire: adding or changing an approval has to be a deliberate change to this test.
+
+    Both entries are for the shared test account and say so. Nothing here is release approval.
+    """
+    assert [s.model_id for s in APPROVED_SELECTIONS] == [
+        "au.anthropic.claude-sonnet-5-5",
+        "openai.gpt-oss-120b-1:0",
+    ]
+    for selection in APPROVED_SELECTIONS:
+        assert "not release evidence" in selection.evidence.regional.casefold()
+        assert "not verified" in selection.evidence.privacy.casefold()
+        assert set(selection.inference_regions) <= {"ap-southeast-2", "ap-southeast-4"}
+    assert codes(cfg(), None).codes == ("unapproved_model",)  # any other model is still refused
+
+
+def test_the_sonnet_profile_can_be_selected_with_conservative_settings():
+    config = BedrockConfig(
+        region="ap-southeast-2",
+        model_id="au.anthropic.claude-sonnet-5-5",
+        inference_config=InferenceConfig(max_tokens=1024),
+    )
+    chosen = validate_bedrock_config(config).selection
+    assert chosen.model_id == "au.anthropic.claude-sonnet-5-5"
+    assert Capability.FORCED_TOOL_CHOICE in chosen.capabilities
+
+
+def test_the_gpt_oss_model_can_be_selected_but_does_not_claim_forced_tool_choice():
+    config = BedrockConfig(
+        region="ap-southeast-2",
+        model_id="openai.gpt-oss-120b-1:0",
+        inference_config=InferenceConfig(max_tokens=1024),
+    )
+    chosen = validate_bedrock_config(config).selection
+    assert Capability.FORCED_TOOL_CHOICE not in chosen.capabilities
+
+
+def test_a_token_limit_above_the_approved_ceiling_is_refused_for_both_test_entries():
+    for model in ("au.anthropic.claude-sonnet-5-5", "openai.gpt-oss-120b-1:0"):
+        config = BedrockConfig(
+            region="ap-southeast-2",
+            model_id=model,
+            inference_config=InferenceConfig(max_tokens=8193),
+        )
+        assert codes(config, None).codes == ("unsupported_setting",)
 
 
 def test_unapproved_identifier_rejected_without_substitution():

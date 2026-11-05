@@ -20,6 +20,10 @@
 #                   secretsmanager:PutSecretValue, and the key's kms:GenerateDataKey/Decrypt
 #                   when the environment has its own key. The cookie key already exists.
 #
+# New parameters carry the organisation's tags (infra/org-tags.json). AWS does not allow tags together
+# with an overwrite, so tags are set when a parameter is first created and an existing one is only
+# overwritten.
+#
 # --rotate-cookie-key generates a new cookie signing key and stores it. THIS ENDS EVERY SESSION
 # AND PENDING GRANT AT ONCE. Without it an existing key is left alone.
 set -euo pipefail
@@ -49,17 +53,33 @@ cookie_name="plan-${env_name}/cookie-signing-key"
 # Reads a value on stdin and prints the JSON for `aws ssm put-parameter --cli-input-json`. The
 # value is held in memory only and goes to aws through a pipe, so it is not in any argument.
 parameter_json() { # parameter_json <name> <overwrite: true|false> [min length]
-  NAME=$1 OVERWRITE=$2 KEY_ID=$kms_key MIN=${3:-1} python3 -c '
+  NAME=$1 OVERWRITE=$2 KEY_ID=$kms_key MIN=${3:-1} TAGS_FILE="$root/infra/org-tags.json" python3 -c '
 import json, os, sys
 value = sys.stdin.read()
 if len(value) < int(os.environ["MIN"]):
     sys.exit("value too short")
-print(json.dumps({"Name": os.environ["NAME"], "Value": value, "Type": "SecureString",
-                  "KeyId": os.environ["KEY_ID"], "Overwrite": os.environ["OVERWRITE"] == "true"}))'
+overwrite = os.environ["OVERWRITE"] == "true"
+request = {"Name": os.environ["NAME"], "Value": value, "Type": "SecureString",
+           "KeyId": os.environ["KEY_ID"], "Overwrite": overwrite}
+if not overwrite:  # AWS rejects tags together with an overwrite
+    tags = json.load(open(os.environ["TAGS_FILE"]))
+    request["Tags"] = [{"Key": k, "Value": v} for k, v in tags.items()]
+print(json.dumps(request))'
 }
 put_parameter() { # JSON from parameter_json on stdin
   aws ssm put-parameter --region "$region" --cli-input-json file:///dev/stdin \
     --query Version --output text > /dev/null
+}
+parameter_exists() { # 0 if it exists, 1 if it does not; anything else is an error and stops the script
+  local err
+  if err=$(aws ssm get-parameter --region "$region" --name "$1" \
+    --query Parameter.Version --output text 2>&1 > /dev/null); then
+    return 0
+  elif grep -q ParameterNotFound <<<"$err"; then
+    return 1
+  fi
+  echo "Could not check $1: ${err}" >&2
+  exit 1
 }
 new_cookie_key() { # 62 or so URL-safe characters, never printed
   openssl rand -base64 48 | tr -d '\n=+/'
@@ -93,9 +113,14 @@ unset code
 case "$hash" in '$argon2'*) ;; *) echo "Hashing failed. Nothing changed." >&2; exit 1 ;; esac
 
 if [ "$backend" = parameterstore ]; then
-  printf '%s' "$hash" | parameter_json "$hash_name" true | put_parameter
+  if parameter_exists "$hash_name"; then
+    printf '%s' "$hash" | parameter_json "$hash_name" true | put_parameter
+    echo "Updated ${hash_name} in ${region} (key ${kms_key})." >&2
+  else
+    printf '%s' "$hash" | parameter_json "$hash_name" false | put_parameter
+    echo "Created ${hash_name} in ${region} (key ${kms_key}) with the project tags." >&2
+  fi
   unset hash
-  echo "Updated ${hash_name} in ${region} (key ${kms_key})." >&2
 
   if [ "$rotate" = true ]; then
     echo "Rotating the cookie signing key: every session and pending grant ends now." >&2
@@ -103,15 +128,11 @@ if [ "$backend" = parameterstore ]; then
     echo "Replaced ${cookie_name}." >&2
   else
     # Existence only: no decryption, so the value is never read.
-    if err=$(aws ssm get-parameter --region "$region" --name "$cookie_name" \
-      --query Parameter.Version --output text 2>&1 > /dev/null); then
+    if parameter_exists "$cookie_name"; then
       echo "${cookie_name} already exists; left alone (use --rotate-cookie-key to replace it)." >&2
-    elif grep -q ParameterNotFound <<<"$err"; then
-      new_cookie_key | parameter_json "$cookie_name" false 48 | put_parameter
-      echo "Created ${cookie_name}." >&2
     else
-      echo "Could not check ${cookie_name}: ${err}" >&2
-      exit 1
+      new_cookie_key | parameter_json "$cookie_name" false 48 | put_parameter
+      echo "Created ${cookie_name} with the project tags." >&2
     fi
   fi
 else

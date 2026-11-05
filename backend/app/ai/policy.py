@@ -6,8 +6,9 @@ inference destinations, the provider data-handling position, the ConverseStream 
 tool capabilities, and the IAM resources (procedure: docs/bedrock.md). Changing the
 model therefore needs a new or updated entry here, not just a new identifier.
 
-`APPROVED_SELECTIONS` is empty on purpose: nothing has been verified yet, and a model
-must never be added from memory.
+`APPROVED_SELECTIONS` holds only the two TEST-ONLY entries for the shared test account (marked
+"NOT release evidence" in their evidence): no model has release approval yet, and a model must never
+be added from memory.
 """
 
 from __future__ import annotations
@@ -100,8 +101,88 @@ class ApprovedSelection:
             raise ValueError(f"invalid approved selection: {', '.join(dict.fromkeys(problems))}")
 
 
-# Verified entries only. See docs/bedrock.md for the checklist and the evidence register.
-APPROVED_SELECTIONS: tuple[ApprovedSelection, ...] = ()
+# See docs/bedrock.md for the checklist and the evidence register.
+#
+# TEST-ONLY: these two entries let the deployed app use the models checked in the shared test
+# account on 2026-11-05. They are NOT release evidence: privacy is not verified, and tool use was
+# not checked against the documentation (the first run is the proof). Before any release, replace
+# them with entries that completed the whole checklist, and update the register in docs/bedrock.md.
+_SHARED_ACCOUNT_TEST = dt.date(2026, 11, 5)
+APPROVED_SELECTIONS: tuple[ApprovedSelection, ...] = (
+    ApprovedSelection(
+        model_id="au.anthropic.claude-sonnet-5-5",
+        identifier_kind=IdentifierKind.INFERENCE_PROFILE,
+        foundation_model_ids=("anthropic.claude-sonnet-5-5",),
+        client_regions=("ap-southeast-2",),
+        inference_regions=("ap-southeast-2", "ap-southeast-4"),
+        capabilities=frozenset(
+            {Capability.CONVERSE_STREAM, Capability.TOOL_USE, Capability.FORCED_TOOL_CHOICE}
+        ),
+        evidence=Evidence(
+            verified_on=_SHARED_ACCOUNT_TEST,
+            verified_by="local tester (shared test account)",
+            regional=(
+                "get-inference-profile for au.anthropic.claude-sonnet-5-5 lists foundation-model "
+                "ARNs in ap-southeast-2 and ap-southeast-4 only. SHARED-ACCOUNT FUNCTIONAL TEST "
+                "ONLY, NOT release evidence."
+            ),
+            privacy=(
+                "NOT VERIFIED for release: the Bedrock data-protection statement is not yet "
+                "recorded against this model."
+            ),
+            capabilities=(
+                "Streaming confirmed (get-foundation-model responseStreamingSupported=true). Tool "
+                "use and forced tool choice NOT verified from the Converse features table: "
+                "asserted for a functional test and proven only by running the interview or "
+                "python -m app.ai.smoke. Limits are deliberately conservative, not from the docs."
+            ),
+            sources=(
+                "aws bedrock get-inference-profile (shared test account, 2026-11-05)",
+                "aws bedrock get-foundation-model anthropic.claude-sonnet-5-5 (2026-11-05)",
+            ),
+        ),
+        max_tokens_limit=8192,
+        temperature_range=(0.0, 1.0),
+        top_p_range=(0.0, 1.0),
+        max_stop_sequences=4,
+        temperature_and_top_p_exclusive=True,
+        allowed_additional_fields=frozenset(),
+    ),
+    ApprovedSelection(
+        model_id="openai.gpt-oss-120b-1:0",
+        identifier_kind=IdentifierKind.FOUNDATION_MODEL,
+        foundation_model_ids=("openai.gpt-oss-120b-1:0",),
+        client_regions=("ap-southeast-2",),
+        inference_regions=("ap-southeast-2",),
+        capabilities=frozenset({Capability.CONVERSE_STREAM, Capability.TOOL_USE}),
+        evidence=Evidence(
+            verified_on=_SHARED_ACCOUNT_TEST,
+            verified_by="local tester (shared test account)",
+            regional=(
+                "Direct foundation-model id (not an inference profile), listed ON_DEMAND in "
+                "ap-southeast-2 by list-foundation-models; a direct id is processed in the client "
+                "region. SHARED-ACCOUNT FUNCTIONAL TEST ONLY, NOT release evidence."
+            ),
+            privacy=(
+                "NOT VERIFIED for release: the Bedrock data-protection statement and any "
+                "OpenAI-specific terms are not yet recorded against this model."
+            ),
+            capabilities=(
+                "Streaming confirmed (list-foundation-models responseStreamingSupported=true). "
+                "Tool use NOT verified from the Converse features table: asserted for a "
+                "functional test and proven only by running the interview or python -m "
+                "app.ai.smoke. Forced tool choice is not claimed. Limits are conservative."
+            ),
+            sources=("aws bedrock list-foundation-models --by-provider openai (2026-11-05)",),
+        ),
+        max_tokens_limit=8192,
+        temperature_range=(0.0, 1.0),
+        top_p_range=(0.0, 1.0),
+        max_stop_sequences=4,
+        temperature_and_top_p_exclusive=False,
+        allowed_additional_fields=frozenset(),
+    ),
+)
 
 
 @dataclass(frozen=True)
