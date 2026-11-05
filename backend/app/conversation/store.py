@@ -136,6 +136,30 @@ class InMemoryConversationStore:
         with self._lock:
             self._conversations.pop(session_id, None)
 
+    def delete_session_if_revision(self, session_id: str, revision: int) -> bool:
+        """Delete only if no answer has arrived since `revision`: one atomic step, so a purge can
+        never remove work the user has not seen. False (and nothing deleted) if it moved on."""
+        with self._lock:
+            conv = self._conversations.get(session_id)
+            if (conv.revision if conv else 0) != revision:
+                return False
+            self._conversations.pop(session_id, None)
+            return True
+
+    def expired_session_ids(
+        self, now: datetime, limit: int, after: str | None = None
+    ) -> tuple[list[str], str | None]:
+        """One page of sessions past their fixed 24 h life (strictly before `now`), by id.
+
+        Returns (ids, token for the next page or None). Holds ids and times only, never content.
+        """
+        with self._lock:
+            due = sorted(k for k, c in self._conversations.items() if c.expires_at < now)
+        if after is not None:
+            due = [k for k in due if k > after]
+        page = due[:limit]
+        return page, (page[-1] if len(due) > limit else None)
+
 
 class UnavailableConversationStore:
     """Used when deployed until a durable store exists: every call fails closed with a 503.
@@ -147,6 +171,7 @@ class UnavailableConversationStore:
         raise DependencyUnavailable("conversation_store_unavailable")
 
     history = submit = get_turn = context_for = complete_turn = mark = _fail
+    delete_session_if_revision = expired_session_ids = _fail
 
     def delete_session(self, session_id: str) -> None:  # nothing is stored, nothing to delete
         return None

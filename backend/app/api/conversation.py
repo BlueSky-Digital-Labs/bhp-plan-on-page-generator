@@ -15,7 +15,7 @@ from app.errors import ApiProblem
 router = APIRouter()
 
 _TURN_ID = re.compile(r"^[a-f0-9]{32}$")
-MAX_ANSWER_CHARS = 4000
+MAX_ANSWER_CHARS = 20_000  # an answer of up to 4,000 typed characters plus one attached file's text
 
 
 def get_conversation(request: Request) -> ConversationService:

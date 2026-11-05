@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { controlledStream, csrfRoute, envelope, json, mockApi, ndjson } from "../test/mockApi";
+import { type Handler, controlledStream, csrfRoute, envelope, json, mockApi, ndjson } from "../test/mockApi";
 import { ConversationScreen } from "./ConversationScreen";
 
 const USER_ID = "1".repeat(32);
@@ -27,7 +27,7 @@ function setup(routes: Parameters<typeof mockApi>[0]) {
 
 const body = (calls: { key: string; init?: RequestInit }[], key = "POST /api/conversation/turns") =>
   JSON.parse(String(calls.filter((c) => c.key === key).at(-1)!.init?.body));
-const posts = (calls: { key: string }[]) => calls.filter((c) => c.key === "POST /api/conversation/turns");
+const posts = <T extends { key: string }>(calls: T[]) => calls.filter((c) => c.key === "POST /api/conversation/turns");
 
 async function typeAndSend(text = "My idea") {
   const box = await screen.findByLabelText(/Describe your idea|Your answer/);
@@ -445,5 +445,161 @@ describe("content safety", () => {
     expect(setItem).not.toHaveBeenCalled();
     expect(idb).not.toHaveBeenCalled();
     expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain("Secret plan");
+  });
+});
+
+describe("attaching a file", () => {
+  const BLOCK = "[[Attached file: idea.json | json]]\n{\n  \"idea\": \"Shift notes\"\n}\n[[End of attached file]]";
+  const ATTACHED = { filename: "idea.json", kind: "json", characters: 1234, truncated: false, block: BLOCK };
+  const UPLOAD = "POST /api/attachments?name=idea.json";
+  const file = (name = "idea.json", size = 10) =>
+    new File([new Uint8Array(size)], name, { type: "application/octet-stream" });
+  const choose = (f: File) => userEvent.upload(screen.getByTestId("file-input"), f, { applyAccept: false });
+  const attachOk = (extra: Record<string, Handler | Handler[]> = {}) => ({
+    "GET /api/conversation": [convo(0), convo(1, user(), bot("complete", "Thanks."))],
+    "POST /api/conversation/turns": created(),
+    [STREAM]: () => ndjson([{ type: "complete" }]),
+    [UPLOAD]: () => json(ATTACHED),
+    ...extra,
+  });
+
+  it("offers a paperclip, reads the file and shows it as a chip the user can remove", async () => {
+    setup(attachOk());
+    const clip = await screen.findByRole("button", { name: /Attach a file/ });
+    expect(clip).toBeEnabled();
+    await choose(file());
+    expect(await screen.findByText("idea.json")).toBeInTheDocument();
+    expect(screen.getByText(/1,234 characters/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Remove idea.json" }));
+    expect(screen.queryByText("idea.json")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled(); // nothing left to send
+  });
+
+  it("uploads the raw file with the forgery token and nothing else", async () => {
+    const encoded = "POST /api/attachments?name=my%20idea.json";
+    const { calls } = setup(attachOk({ [encoded]: () => json(ATTACHED) }));
+    await screen.findByRole("button", { name: /Attach a file/ });
+    const picked = file("my idea.json");
+    await choose(picked);
+    await waitFor(() => expect(calls.some((c) => c.key === encoded)).toBe(true));
+    const sent = calls.find((c) => c.key === encoded)!.init!;
+    expect(sent.body).toBe(picked);
+    expect((sent.headers as Record<string, string>)["X-CSRF-Token"]).toBe("test-csrf-token");
+  });
+
+  it("can be sent with no typed text: the file's text is the answer", async () => {
+    const { calls } = setup(attachOk());
+    await screen.findByRole("button", { name: /Attach a file/ });
+    await choose(file());
+    await screen.findByText("idea.json");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(posts(calls)).toHaveLength(1));
+    expect(body(calls).text).toBe(BLOCK);
+    await waitFor(() => expect(screen.queryByText("idea.json")).not.toBeInTheDocument()); // cleared after sending
+  });
+
+  it("sends what was typed first, then the file's text, as one answer", async () => {
+    const { calls } = setup(attachOk());
+    const box = await screen.findByLabelText(/Describe your idea|Your answer/);
+    await userEvent.type(box, "Here is our idea.");
+    await choose(file());
+    await screen.findByText("idea.json");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(posts(calls)).toHaveLength(1));
+    expect(body(calls).text).toBe(`Here is our idea.\n\n${BLOCK}`);
+  });
+
+  it("keeps the same submission id when retrying the same answer and file", async () => {
+    const { calls } = setup(
+      attachOk({
+        "GET /api/conversation": convo(0),
+        "POST /api/conversation/turns": [() => envelope("internal_error", 500), created()],
+      }),
+    );
+    await screen.findByRole("button", { name: /Attach a file/ });
+    await choose(file());
+    await screen.findByText("idea.json");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(posts(calls)).toHaveLength(1));
+    expect(screen.getByText("idea.json")).toBeInTheDocument(); // still attached after a failed send
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(posts(calls)).toHaveLength(2));
+    const ids = posts(calls).map((c) => JSON.parse(String(c.init?.body)).submission_id);
+    expect(ids[0]).toBe(ids[1]);
+  });
+
+  it("says so, without uploading, for a type that is not supported or a file that is too large", async () => {
+    const { calls } = setup(attachOk());
+    await screen.findByRole("button", { name: /Attach a file/ });
+    await choose(file("notes.txt"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Only PDF, Word (.docx), PowerPoint (.pptx) and JSON");
+    await choose(file("big.pdf", 6 * 1024 * 1024));
+    expect(await screen.findByRole("alert")).toHaveTextContent("That file is too large. The limit is 5 MB.");
+    expect(calls.some((c) => c.key.startsWith("POST /api/attachments"))).toBe(false);
+  });
+
+  it.each([
+    ["file_unreadable", 422, "could not be read"],
+    ["file_has_no_text", 422, "No text was found"],
+    ["file_too_large", 413, "too large"],
+    ["internal_error", 500, "could not be attached"],
+  ])("explains a %s refusal in fixed words and never shows what the server said", async (code, status, words) => {
+    setup(attachOk({ [UPLOAD]: () => envelope(code, status) }));
+    await screen.findByRole("button", { name: /Attach a file/ });
+    await choose(file());
+    expect(await screen.findByRole("alert")).toHaveTextContent(words);
+    expect(screen.queryByText(/SERVER-TEXT-MUST-NEVER-RENDER/)).not.toBeInTheDocument();
+    expect(screen.queryByText("idea.json")).not.toBeInTheDocument();
+  });
+
+  it("returns to entry when the session ended while reading the file", async () => {
+    const { onAccessLost } = setup(attachOk({ [UPLOAD]: () => envelope("unauthenticated", 401) }));
+    await screen.findByRole("button", { name: /Attach a file/ });
+    await choose(file());
+    await waitFor(() => expect(onAccessLost).toHaveBeenCalled());
+  });
+
+  it("warns when only the start of a long file will be sent", async () => {
+    setup(attachOk({ [UPLOAD]: () => json({ ...ATTACHED, truncated: true }) }));
+    await screen.findByRole("button", { name: /Attach a file/ });
+    await choose(file());
+    expect(await screen.findByText(/shortened to fit/)).toBeInTheDocument();
+    expect(screen.getByText(/only that part will be sent/)).toBeInTheDocument();
+  });
+
+  it("shows an attached file in the conversation folded away, with the typed words visible", async () => {
+    const text = `Here is our idea.\n\n${BLOCK}`;
+    setup({ "GET /api/conversation": convo(1, { ...user(text) }, bot("complete", "Thanks.")) });
+    expect(await screen.findByText("Here is our idea.")).toBeInTheDocument();
+    const summary = screen.getByText(/Attached file: idea.json \(/);
+    expect(summary.closest("details")).not.toHaveAttribute("open");
+    expect(summary).toHaveTextContent("characters");
+    expect(document.querySelector(".turn__file-text")).toHaveTextContent('"idea": "Shift notes"');
+  });
+
+  it("shows a file's text as inert text, never as markup", async () => {
+    const hostile = "[[Attached file: x.json | json]]\n<img src=x onerror=alert(1)>\n[[End of attached file]]";
+    setup({ "GET /api/conversation": convo(1, { ...user(hostile) }, bot("complete", "Thanks.")) });
+    await screen.findByText(/Attached file: x.json/);
+    expect(document.querySelector("img[src='x']")).toBeNull();
+    expect(document.querySelector(".turn__file-text")).toHaveTextContent("<img src=x onerror=alert(1)>");
+  });
+
+  it("never treats the assistant's text as an attachment", async () => {
+    setup({ "GET /api/conversation": convo(1, user(), bot("complete", BLOCK)) });
+    await screen.findByText(/Attached file: idea.json/, { selector: "p" });
+    expect(document.querySelector("details")).toBeNull();
+  });
+
+  it("cannot attach while an answer is being sent or a reply is on its way", async () => {
+    const stream = controlledStream();
+    setup({
+      "GET /api/conversation": [convo(0), convo(1, user(), bot("pending"))],
+      "POST /api/conversation/turns": created(),
+      [STREAM]: () => stream.response(),
+    });
+    await typeAndSend("My idea");
+    await waitFor(() => expect(screen.getByRole("button", { name: /Attach a file/ })).toBeDisabled());
+    stream.end();
   });
 });

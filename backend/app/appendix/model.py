@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from app.attachments.markers import typed_part
 from app.conversation.store import Turn
 from app.interview.canvas import LABELS
 
@@ -40,6 +41,7 @@ class ExportSnapshot:
     canvas: dict[str, Any]
     declined: tuple[str, ...]
     turns: tuple[Turn, ...]
+    confirmed_revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -142,7 +144,8 @@ def _summary(sections: tuple[AnswerSection, ...], turns: tuple[QATurn, ...]) -> 
         ("Opportunity types", value("opportunityTypes")),
     ]
     if first_user is not None:
-        facts.append(("How it was first described", shorten(first_user.text, SHORT_OPENING)))
+        opening = typed_part(first_user.text) or first_user.text  # their own words first
+        facts.append(("How it was first described", shorten(opening, SHORT_OPENING)))
     facts += [
         (
             "Conversation",

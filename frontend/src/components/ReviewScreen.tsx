@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type CanvasView, getConversation } from "../api/conversation";
+import { type CanvasView, type Conversation, confirmCanvas, getConversation } from "../api/conversation";
 import { ApiError } from "../api/client";
-import { type AppendixFormat, downloadAppendix, downloadCanvasPptx } from "../api/appendix";
-import { downloadOnePagerPdf } from "../canvas/downloadPdf";
+import { type AppendixFormat, type CanvasFormat, downloadAppendix, downloadCanvas } from "../api/appendix";
 import { DownloadMenu } from "./DownloadMenu";
+import { DownloadStatus } from "./DownloadStatus";
+import { EmailPanel } from "./EmailPanel";
 import { ErrorNotice } from "./ErrorNotice";
 import { Loading } from "./Loading";
 import { OnePager } from "./OnePager";
-
-const PDF_FILENAME = "plan-on-a-page.pdf";
 
 const CANVAS_CHOICES = [
   { key: "pdf", label: "PDF" },
@@ -19,97 +18,91 @@ const APPENDIX_CHOICES = [
   { key: "docx", label: "Word (.docx)" },
   { key: "json", label: "JSON" },
 ];
+
 // Fixed copy keyed on the error code: nothing from the response is shown.
-const APPENDIX_MESSAGES: Record<string, string> = {
-  canvas_not_ready: "The canvas is not complete yet, so the appendix is not available.",
-  conversation_changed: "Your conversation changed while the appendix was being prepared. Please try again.",
+const CHANGED = "The canvas changed since it was shown. Please read it again before confirming.";
+const MESSAGES: Record<string, string> = {
+  revision_conflict: CHANGED,
+  not_confirmed: "Please confirm the canvas first.",
+  canvas_not_ready: "The canvas is not complete yet.",
+  canvas_incomplete: "The canvas is not complete yet.",
+  conversation_changed: CHANGED,
+  turn_in_progress: "The assistant has not finished replying yet. Please try again in a moment.",
 };
-const PPTX_FAILED = "The PowerPoint file could not be created. Please try again.";
-const APPENDIX_FAILED = "The appendix could not be created. Please try again.";
+// After these the page is out of date, so it is re-read from the server straight away.
+const OUT_OF_DATE = new Set(Object.keys(MESSAGES));
+const FAILED = "That could not be done. Please try again.";
 
 type State =
   | { phase: "loading" }
-  | { phase: "ready"; canvas: CanvasView }
+  | { phase: "ready"; canvas: CanvasView; revision: number; confirmedRevision: number | null }
   | { phase: "incomplete"; remaining: number }
   | { phase: "error"; error: ApiError };
 
-// The finished canvas as a one-pager. It only displays what the server has recorded, and only when
-// the server's validator says the canvas is ready: nothing is generated or filled in here.
+function stateFrom({ canvas, revision, confirmed_revision }: Conversation): State {
+  if (canvas?.ready_for_review) {
+    return { phase: "ready", canvas, revision, confirmedRevision: confirmed_revision ?? null };
+  }
+  return { phase: "incomplete", remaining: canvas?.missing_required.length ?? 0 };
+}
+
+// The read-back: the finished canvas, shown only when the server says it is complete. The user reads
+// every field, corrects anything through the conversation, and confirms the exact revision shown.
+// Documents are offered only for a revision that is both current and confirmed; the server checks
+// that again on every download. Nothing is generated or filled in here.
 export function ReviewScreen({
   onBack,
   onAccessLost,
+  onPurged,
 }: {
   onBack: () => void;
   onAccessLost: () => void;
+  onPurged: () => void;
 }) {
   const [state, setState] = useState<State>({ phase: "loading" });
-  const [downloading, setDownloading] = useState(false);
-  const [downloadFailed, setDownloadFailed] = useState(false);
-  const [pptxBusy, setPptxBusy] = useState(false);
-  const [pptxError, setPptxError] = useState<string | null>(null);
-  const [appendixBusy, setAppendixBusy] = useState(false);
-  const [appendixError, setAppendixError] = useState<string | null>(null);
-  const pagerRef = useRef<HTMLDivElement>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState<"canvas" | "appendix" | null>(null);
+  const [mailOpen, setMailOpen] = useState(false);
+  const [downloadAttempts, setDownloadAttempts] = useState(0); // each one re-reads the status
+  const mailButton = useRef<HTMLButtonElement>(null);
 
-  const getPptx = async () => {
-    setPptxBusy(true);
-    setPptxError(null);
-    try {
-      await downloadCanvasPptx();
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) onAccessLost();
-      else setPptxError((error instanceof ApiError && APPENDIX_MESSAGES[error.code]) || PPTX_FAILED);
-    } finally {
-      setPptxBusy(false);
-    }
-  };
-
-  const getAppendix = async (format: AppendixFormat) => {
-    setAppendixBusy(true);
-    setAppendixError(null);
-    try {
-      await downloadAppendix(format);
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 401) onAccessLost();
-      else setAppendixError((error instanceof ApiError && APPENDIX_MESSAGES[error.code]) || APPENDIX_FAILED);
-    } finally {
-      setAppendixBusy(false);
-    }
-  };
-
-  const download = async () => {
-    const onePager = pagerRef.current?.querySelector<HTMLElement>(".one-pager");
-    if (!onePager) return;
-    setDownloading(true);
-    setDownloadFailed(false);
-    try {
-      await downloadOnePagerPdf(onePager, PDF_FILENAME);
-    } catch {
-      setDownloadFailed(true);
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  const load = useCallback(async (signal?: AbortSignal) => {
-    setState({ phase: "loading" });
-    try {
-      const { canvas } = await getConversation(signal);
-      if (signal?.aborted) return;
-      if (canvas?.ready_for_review) setState({ phase: "ready", canvas });
-      else setState({ phase: "incomplete", remaining: canvas?.missing_required.length ?? 0 });
-    } catch (error) {
-      if (signal?.aborted) return;
-      const apiError = error instanceof ApiError ? error : new ApiError(null, "client_error", null);
-      if (apiError.status === 401) onAccessLost();
-      else setState({ phase: "error", error: apiError });
-    }
-  }, [onAccessLost]);
+  // `quiet` re-reads without blanking the screen (after a stale attempt).
+  const load = useCallback(
+    async (signal?: AbortSignal, quiet = false) => {
+      if (!quiet) setState({ phase: "loading" });
+      try {
+        const conversation = await getConversation(signal);
+        if (signal?.aborted) return;
+        setState(stateFrom(conversation));
+      } catch (error) {
+        if (signal?.aborted) return;
+        const apiError = error instanceof ApiError ? error : new ApiError(null, "client_error", null);
+        if (apiError.status === 401) onAccessLost();
+        else setState({ phase: "error", error: apiError });
+      }
+    },
+    [onAccessLost],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
+  }, [load]);
+
+  // One place for every failed action: sign-in lost, out of date (re-read at once), or generic.
+  const failed = (error: unknown) => {
+    if (error instanceof ApiError && error.status === 401) return onAccessLost();
+    const code = error instanceof ApiError ? error.code : "";
+    setNotice(MESSAGES[code] ?? FAILED);
+    if (OUT_OF_DATE.has(code)) void load(undefined, true);
+  };
+
+  // The canvas moved on (another tab, a later answer): say so and read it again.
+  const outOfDate = useCallback(() => {
+    setNotice(CHANGED);
+    void load(undefined, true);
   }, [load]);
 
   if (state.phase === "loading") return <Loading label="Preparing your canvas…" />;
@@ -124,54 +117,155 @@ export function ReviewScreen({
             : "A few last questions are still to go."}{" "}
           Finish the conversation first, then generate the canvas.
         </p>
+        {notice && (
+          <p role="alert" className="notice">
+            {notice}
+          </p>
+        )}
         <button type="button" onClick={onBack}>
           Back to the conversation
         </button>
       </>
     );
   }
+
+  const { canvas, revision, confirmedRevision } = state;
+  const confirmed = confirmedRevision === revision;
+  const priority = canvas.fields.priority;
+
+  const confirm = async () => {
+    setConfirming(true);
+    setNotice(null);
+    try {
+      setState(stateFrom(await confirmCanvas(revision)));
+    } catch (error) {
+      failed(error);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const getCanvas = async (format: CanvasFormat) => {
+    setBusy("canvas");
+    setNotice(null);
+    try {
+      await downloadCanvas(format, revision);
+    } catch (error) {
+      failed(error);
+    } finally {
+      setBusy(null);
+      setDownloadAttempts((n) => n + 1);
+    }
+  };
+
+  const getAppendix = async (format: AppendixFormat) => {
+    setBusy("appendix");
+    setNotice(null);
+    try {
+      await downloadAppendix(format, revision);
+    } catch (error) {
+      failed(error);
+    } finally {
+      setBusy(null);
+      setDownloadAttempts((n) => n + 1);
+    }
+  };
+
   return (
     <>
       <div className="review-actions">
         <button type="button" className="button--secondary" onClick={onBack}>
           Back to the conversation
         </button>
-        <DownloadMenu
-          label="Download canvas"
-          choices={CANVAS_CHOICES}
-          busy={downloading || pptxBusy}
-          onChoose={(key) => void (key === "pptx" ? getPptx() : download())}
-        />
-        <DownloadMenu
-          label="Download appendix"
-          choices={APPENDIX_CHOICES}
-          busy={appendixBusy}
-          onChoose={(key) => void getAppendix(key as AppendixFormat)}
-        />
+        {confirmed && (
+          <>
+            <DownloadMenu
+              label="Download canvas"
+              choices={CANVAS_CHOICES}
+              busy={busy === "canvas"}
+              onChoose={(key) => void getCanvas(key as CanvasFormat)}
+            />
+            <DownloadMenu
+              label="Download appendix"
+              choices={APPENDIX_CHOICES}
+              busy={busy === "appendix"}
+              onChoose={(key) => void getAppendix(key as AppendixFormat)}
+            />
+            <button
+              type="button"
+              ref={mailButton}
+              aria-expanded={mailOpen}
+              aria-controls={mailOpen ? "mail-panel" : undefined}
+              onClick={() => setMailOpen((open) => !open)}
+            >
+              Send email
+            </button>
+          </>
+        )}
       </div>
-      <p className="review-note">
-        The canvas is the one-page summary ({PDF_FILENAME}, or an editable PowerPoint slide). The appendix holds
-        a quick summary, the full answers and the whole conversation, for assessors, and runs to as many pages as it needs. Open a
-        file to check it before you rely on it. Nothing is submitted anywhere.
-      </p>
-      {pptxError && (
-        <p role="alert" className="notice">
-          {pptxError}
-        </p>
+
+      {confirmed && mailOpen && (
+        <div id="mail-panel">
+          <EmailPanel
+            revision={revision}
+            onClose={() => {
+              setMailOpen(false);
+              queueMicrotask(() => mailButton.current?.focus());
+            }}
+            onOutOfDate={(error) => {
+              setMailOpen(false);
+              failed(error);
+            }}
+            onAccessLost={onAccessLost}
+          />
+        </div>
       )}
-      {downloadFailed && (
-        <p role="alert" className="notice">
-          The PDF could not be created. Please try again.
-        </p>
+
+      {confirmed && (
+        <DownloadStatus
+          revision={revision}
+          refreshKey={downloadAttempts}
+          onOutOfDate={outOfDate}
+          onPurged={onPurged}
+          onAccessLost={onAccessLost}
+        />
       )}
-      {appendixError && (
-        <p role="alert" className="notice">
-          {appendixError}
+
+      <section className="readback card" aria-labelledby="readback-heading">
+        <h2 id="readback-heading">Check your canvas</h2>
+        <p>
+          Read every section below. You are responsible for the facts being right
+          {typeof priority === "string" && priority ? (
+            <>
+              {" "}
+              and for the priority, <strong>{priority}</strong>, which is the one you chose
+            </>
+          ) : null}
+          . If anything is wrong, go back and tell the assistant what to change.
         </p>
-      )}
-      <div ref={pagerRef}>
-        <OnePager canvas={state.canvas} />
-      </div>
+        {confirmed ? (
+          <p role="status" className="readback__done">
+            You confirmed this version. You can download it, or send it by email, with the buttons above. Downloads are saved on your own
+            device, and an email goes only to the addresses you type. Nothing is submitted anywhere else. If you change anything, you will need to confirm again.
+          </p>
+        ) : (
+          <div className="readback__actions">
+            <button type="button" onClick={() => void confirm()} disabled={confirming}>
+              {confirming ? "Confirming…" : "Yes, this is correct"}
+            </button>
+            <button type="button" className="button--secondary" onClick={onBack}>
+              Something is wrong: go back and correct it
+            </button>
+          </div>
+        )}
+        {notice && (
+          <p role="alert" className="notice">
+            {notice}
+          </p>
+        )}
+      </section>
+
+      <OnePager canvas={canvas} />
     </>
   );
 }

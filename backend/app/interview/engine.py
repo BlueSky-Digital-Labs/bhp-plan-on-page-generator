@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
+from app.attachments.markers import typed_part
 from app.interview.canvas import (
     ALL_FIELDS,
     OPPORTUNITY_TYPES,
@@ -54,6 +55,9 @@ class InterviewState:
     attempts: dict[str, int] = field(default_factory=dict)
     conflicts: dict[str, Any] = field(default_factory=dict)  # field -> new value awaiting a choice
     question: str | None = None  # the outstanding question as shown (without the acknowledgement)
+    # The conversation revision the user confirmed in the read-back. It only ever applies to that
+    # revision: any later answer moves the revision on, which ends the confirmation.
+    confirmed_revision: int | None = None
 
 
 @dataclass
@@ -228,7 +232,7 @@ class Interviewer:
     ) -> Outcome:
         s = copy.deepcopy(state)
         target = s.target
-        stance = detect_stance(user_text, target)
+        stance = detect_stance(typed_part(user_text), target)  # only what they typed
         override = looks_like_override(user_text)
         cue: str | None = None  # a key of ACK: what happened with this answer
 
@@ -283,7 +287,9 @@ class Interviewer:
             if value is None:
                 continue  # unsupported value (e.g. an unknown opportunity type)
             if update.field == "priority" and not self._is_user_priority_choice(
-                target, value, user_text
+                target,
+                value,
+                typed_part(user_text),  # never from an attached file
             ):
                 continue  # priority is only ever the user's explicit choice
             captured |= self._set(s, update.field, value, target)

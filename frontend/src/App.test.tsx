@@ -1,12 +1,8 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { SESSION, csrfRoute, envelope, json, mockApi } from "./test/mockApi";
-
-// Building the PDF needs a real canvas and layout engine; the real thing is covered by the browser tests.
-const downloadPdf = vi.hoisted(() => vi.fn<(el: HTMLElement, filename: string) => Promise<void>>());
-vi.mock("./canvas/downloadPdf", () => ({ downloadOnePagerPdf: downloadPdf }));
 
 const CID = "fedcba9876543210fedcba9876543210";
 const PERMITTED = () => json({ start_permitted: true });
@@ -195,167 +191,337 @@ describe("conversation route", () => {
   });
 });
 
-describe("review route (the one-page canvas)", () => {
-  const READY = {
-    revision: 3,
-    turns: [],
-    canvas: { fields: { solutionName: "Shift Notes Assistant", team: "Ops", priority: "High", opportunityTypes: ["Analyse Data"] }, missing_required: [], ready_for_review: true },
-  };
+describe("review route (read-back, confirmation and downloads)", () => {
+  const FIELDS = { solutionName: "Shift Notes Assistant", team: "Ops", priority: "High", opportunityTypes: ["Analyse Data"] };
+  const review = (revision: number, confirmed: number | null) => () =>
+    json({
+      revision,
+      confirmed_revision: confirmed,
+      turns: [],
+      canvas: { fields: FIELDS, missing_required: [], ready_for_review: true },
+    });
   const NOT_READY = { revision: 1, turns: [], canvas: { fields: {}, missing_required: ["team", "priority"], ready_for_review: false } };
+  const file = (name = "shift-notes-assistant-canvas-r3.pdf") => () =>
+    new Response(new Blob(["bytes"]), { status: 200, headers: { "Content-Disposition": `attachment; filename="${name}"` } });
+  let saved: string[];
 
-  it("shows the one-pager only when the server says the canvas is ready, and can download it as a PDF", async () => {
-    downloadPdf.mockResolvedValue(undefined);
-    mockApi({ "GET /api/session": SIGNED_IN, "GET /api/conversation": () => json(READY) });
+  beforeEach(() => {
+    saved = [];
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:test", revokeObjectURL: () => {} }));
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      saved.push(this.download);
+    });
+  });
+
+  // The server's download status for the review page; nothing downloaded unless a test says so.
+  const downloads =
+    (canvas = false, appendix = false, revision = 3) =>
+    () =>
+      json({
+        revision,
+        canvas_downloaded: canvas,
+        appendix_downloaded: appendix,
+        purge_eligible: canvas && appendix,
+        lock_reason: canvas && appendix ? null : canvas ? "appendix_not_downloaded" : appendix ? "canvas_not_downloaded" : "both_not_downloaded",
+      });
+  const open = async (routes: Parameters<typeof mockApi>[0]) => {
+    const api = mockApi({ "GET /api/session": SIGNED_IN, "GET /api/csrf": csrfRoute, "GET /api/downloads": downloads(), ...routes });
     at("/review");
     render(<App />);
-    expect(await screen.findByRole("heading", { level: 1, name: /AI OPPORTUNITY CANVAS/ })).toBeInTheDocument();
+    await screen.findByRole("heading", { level: 2, name: "Check your canvas" });
+    return api;
+  };
+  const menus = () => screen.queryAllByRole("button", { name: /^Download (canvas|appendix)/ });
+
+  it("reads the whole canvas back with the user's priority, and offers no downloads before it is confirmed", async () => {
+    await open({ "GET /api/conversation": review(3, null) });
+    expect(screen.getByRole("heading", { level: 1, name: /AI OPPORTUNITY CANVAS/ })).toBeInTheDocument();
     expect(screen.getByText("Shift Notes Assistant")).toBeInTheDocument();
-    await chooseDownload("Download canvas", "PDF");
-    expect(downloadPdf).toHaveBeenCalledTimes(1);
-    expect(downloadPdf.mock.calls[0][0]).toHaveClass("one-pager"); // the rendered canvas, not anything else
-    expect(downloadPdf.mock.calls[0][1]).toBe("plan-on-a-page.pdf");
-    expect(screen.getByText(/Open a file to check it/)).toBeInTheDocument();
+    const readBack = screen.getByRole("heading", { name: "Check your canvas" }).parentElement!;
+    expect(readBack).toHaveTextContent("and for the priority, High, which is the one you chose");
+    expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument();
+    expect(menus()).toHaveLength(0);
+  });
+
+  it("sends the displayed revision when the user confirms, then shows the downloads", async () => {
+    const { calls } = await open({
+      "GET /api/conversation": review(3, null),
+      "POST /api/canvas/confirm": review(3, 3),
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Yes, this is correct" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("You confirmed this version");
+    expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/canvas/confirm")!.init?.body))).toEqual({ revision: 3 });
+    expect(screen.getByRole("button", { name: /^Download canvas/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Download appendix/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Yes, this is correct" })).not.toBeInTheDocument();
+  });
+
+  it("shows the downloads straight away for a revision that was already confirmed", async () => {
+    await open({ "GET /api/conversation": review(3, 3) });
+    expect(menus()).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Yes, this is correct" })).not.toBeInTheDocument();
+  });
+
+  it("does not treat a confirmation of an earlier revision as current", async () => {
+    await open({ "GET /api/conversation": review(4, 3) }); // answered again since confirming
+    expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument();
+    expect(menus()).toHaveLength(0);
+  });
+
+  it("lets the user go back to correct something through the conversation", async () => {
+    await open({ "GET /api/conversation": review(3, null) });
+    await userEvent.click(screen.getByRole("button", { name: "Something is wrong: go back and correct it" }));
+    expect(window.location.pathname).toBe("/conversation");
+  });
+
+  it("re-reads the canvas when it changed before the user confirmed, and does not claim a confirmation", async () => {
+    await open({
+      "GET /api/conversation": [review(3, null), review(4, null)],
+      "POST /api/canvas/confirm": () => envelope("revision_conflict", 409),
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Yes, this is correct" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("The canvas changed since it was shown");
+    expect(screen.queryByText(/SERVER-TEXT-MUST-NEVER-RENDER/)).not.toBeInTheDocument();
+    expect(menus()).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeEnabled();
+  });
+
+  it("shows the incomplete screen if the canvas is no longer complete when confirming", async () => {
+    await open({
+      "GET /api/conversation": [review(3, null), () => json(NOT_READY)],
+      "POST /api/canvas/confirm": () => envelope("canvas_incomplete", 422),
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Yes, this is correct" }));
+    expect(await screen.findByRole("heading", { name: "Your canvas is not complete yet" })).toBeInTheDocument();
+  });
+
+  it("returns to entry if the session ended while confirming", async () => {
+    await open({ "GET /api/conversation": review(3, null), "POST /api/canvas/confirm": () => envelope("unauthenticated", 401) });
+    await userEvent.click(screen.getByRole("button", { name: "Yes, this is correct" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+  });
+
+  it.each([
+    ["canvas", "PDF", "GET /api/canvas-file?format=pdf&revision=3", "shift-notes-assistant-canvas-r3.pdf"],
+    ["canvas", "PowerPoint (.pptx)", "GET /api/canvas-file?format=pptx&revision=3", "shift-notes-assistant-canvas-r3.pptx"],
+    ["appendix", "PDF", "GET /api/appendix?format=pdf&revision=3", "shift-notes-assistant-appendix-r3.pdf"],
+    ["appendix", "Word (.docx)", "GET /api/appendix?format=docx&revision=3", "shift-notes-assistant-appendix-r3.docx"],
+    ["appendix", "JSON", "GET /api/appendix?format=json&revision=3", "shift-notes-assistant-appendix-r3.json"],
+  ])("downloads the %s as %s for the confirmed revision, under the server's file name", async (menu, item, key, name) => {
+    const { calls } = await open({ "GET /api/conversation": review(3, 3), [key]: file(name) });
+    await chooseDownload(`Download ${menu}`, item);
+    await waitFor(() => expect(saved).toEqual([name]));
+    expect(calls.some((c) => c.key === key)).toBe(true);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("says so, and lets the user try again, when the PDF cannot be created", async () => {
-    downloadPdf.mockRejectedValueOnce(new Error("canvas failed")).mockResolvedValueOnce(undefined);
-    mockApi({ "GET /api/session": SIGNED_IN, "GET /api/conversation": () => json(READY) });
-    at("/review");
-    render(<App />);
+  it("uses a fixed name if the server's file name is not a plain one", async () => {
+    await open({
+      "GET /api/conversation": review(3, 3),
+      "GET /api/canvas-file?format=pdf&revision=3": file("../../evil name.pdf"),
+    });
     await chooseDownload("Download canvas", "PDF");
-    expect(await screen.findByRole("alert")).toHaveTextContent("The PDF could not be created");
-    expect(screen.queryByText(/canvas failed/)).not.toBeInTheDocument(); // no internal detail shown
-    await chooseDownload("Download canvas", "PDF");
-    expect(downloadPdf).toHaveBeenCalledTimes(2);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() => expect(saved).toEqual(["plan-on-a-page.pdf"]));
   });
 
-  describe("PowerPoint canvas", () => {
-    let saved: Array<{ download: string }>;
-    beforeEach(() => {
-      saved = [];
-      vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:test", revokeObjectURL: () => {} }));
-      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-        saved.push({ download: this.download });
-      });
+  it("re-reads and drops the downloads when the server says the confirmation no longer applies", async () => {
+    await open({
+      "GET /api/conversation": [review(3, 3), review(4, 3)],
+      "GET /api/canvas-file?format=pdf&revision=3": () => envelope("revision_conflict", 409),
     });
-    const open = async (file: () => Response) => {
-      const api = mockApi({
-        "GET /api/session": SIGNED_IN,
-        "GET /api/conversation": () => json(READY),
-        "GET /api/canvas-file?format=pptx": file,
-      });
-      at("/review");
-      render(<App />);
-      await screen.findByRole("button", { name: /^Download canvas/ });
-      return api;
-    };
-
-    it("downloads the canvas as a PowerPoint slide under a fixed name", async () => {
-      const { calls } = await open(() => new Response(new Blob(["x"]), { status: 200 }));
-      await chooseDownload("Download canvas", "PowerPoint (.pptx)");
-      await waitFor(() => expect(saved).toEqual([{ download: "plan-on-a-page.pptx" }]));
-      expect(calls.some((c) => c.key === "GET /api/canvas-file?format=pptx")).toBe(true);
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    });
-
-    it("explains a refusal in fixed words, and any other failure generically", async () => {
-      await open(() => envelope("canvas_not_ready", 409));
-      await chooseDownload("Download canvas", "PowerPoint (.pptx)");
-      expect(await screen.findByRole("alert")).toHaveTextContent("The canvas is not complete yet");
-      expect(screen.queryByText(/SERVER-TEXT-MUST-NEVER-RENDER/)).not.toBeInTheDocument();
-    });
-
-    it("says it could not be created when the server fails, and can be retried", async () => {
-      await open(() => envelope("canvas_failed", 500));
-      await chooseDownload("Download canvas", "PowerPoint (.pptx)");
-      expect(await screen.findByRole("alert")).toHaveTextContent("The PowerPoint file could not be created");
-      expect(screen.getByRole("button", { name: /^Download canvas/ })).toBeEnabled();
-    });
-
-    it("returns to entry when the session has ended", async () => {
-      await open(() => envelope("unauthenticated", 401));
-      await chooseDownload("Download canvas", "PowerPoint (.pptx)");
-      await waitFor(() => expect(window.location.pathname).toBe("/"));
-    });
+    await chooseDownload("Download canvas", "PDF");
+    expect(await screen.findByRole("alert")).toHaveTextContent("The canvas changed since it was shown");
+    await waitFor(() => expect(menus()).toHaveLength(0)); // no stale eligibility left on screen
+    expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument();
+    expect(saved).toHaveLength(0);
   });
 
-  describe("appendix", () => {
-    const file = () => new Response(new Blob(["bytes"]), { status: 200, headers: { "Content-Type": "application/pdf" } });
-    let saved: Array<{ download: string; href: string }>;
+  it("says it could not be done for any other failure and can be retried", async () => {
+    await open({
+      "GET /api/conversation": review(3, 3),
+      "GET /api/appendix?format=pdf&revision=3": () => envelope("appendix_failed", 500),
+    });
+    await chooseDownload("Download appendix", "PDF");
+    expect(await screen.findByRole("alert")).toHaveTextContent("That could not be done. Please try again.");
+    expect(screen.getByRole("button", { name: /^Download appendix/ })).toBeEnabled();
+    expect(saved).toHaveLength(0);
+  });
 
-    beforeEach(() => {
-      saved = [];
-      vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:test", revokeObjectURL: () => {} }));
-      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
-        saved.push({ download: this.download, href: this.href });
-      });
+  it("returns to entry when the session ended during a download", async () => {
+    await open({
+      "GET /api/conversation": review(3, 3),
+      "GET /api/appendix?format=json&revision=3": () => envelope("unauthenticated", 401),
+    });
+    await chooseDownload("Download appendix", "JSON");
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+  });
+
+  it("only runs one canvas download at a time", async () => {
+    let release!: () => void;
+    await open({
+      "GET /api/conversation": review(3, 3),
+      "GET /api/canvas-file?format=pdf&revision=3": () => new Promise<Response>((resolve) => (release = () => resolve(file()()))),
+    });
+    await chooseDownload("Download canvas", "PDF");
+    expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled();
+    release();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Download canvas/ })).toBeEnabled());
+  });
+
+  describe("download status and deleting", () => {
+    const statusCard = () => screen.queryByRole("heading", { level: 2, name: "Your documents" });
+    const deleteButton = () => screen.queryByRole("button", { name: /^Delete my session/ });
+    const reads = (calls: Array<{ key: string }>) => calls.filter((c) => c.key === "GET /api/downloads").length;
+
+    it("shows no download status before the canvas is confirmed", async () => {
+      await open({ "GET /api/conversation": review(3, null) });
+      expect(statusCard()).not.toBeInTheDocument();
     });
 
-    const open = async (appendix: () => Response | Promise<Response>) => {
-      const api = mockApi({
-        "GET /api/session": SIGNED_IN,
-        "GET /api/conversation": () => json(READY),
-        "GET /api/appendix?format=pdf": appendix,
-        "GET /api/appendix?format=docx": appendix,
-        "GET /api/appendix?format=json": appendix,
-      });
-      at("/review");
-      render(<App />);
-      await screen.findByRole("button", { name: /^Download appendix/ });
-      return api;
-    };
+    it("shows the two documents for the confirmed revision, with deleting locked", async () => {
+      await open({ "GET /api/conversation": review(3, 3) });
+      expect(await screen.findByRole("heading", { level: 2, name: "Your documents" })).toBeInTheDocument();
+      expect(await screen.findByText(/Deleting is locked/)).toBeInTheDocument();
+      expect(deleteButton()).not.toBeInTheDocument();
+    });
 
-    it.each([
-      ["PDF", "pdf"],
-      ["Word (.docx)", "docx"],
-      ["JSON", "json"],
-    ])("downloads the appendix as %s under a fixed file name", async (label, format) => {
-      const { calls } = await open(file);
-      await chooseDownload("Download appendix", label);
+    it("shows the status after confirming, for the revision just confirmed", async () => {
+      const { calls } = await open({
+        "GET /api/conversation": review(3, null),
+        "POST /api/canvas/confirm": review(3, 3),
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Yes, this is correct" }));
+      expect(await screen.findByRole("heading", { level: 2, name: "Your documents" })).toBeInTheDocument();
+      await waitFor(() => expect(reads(calls)).toBe(1));
+    });
+
+    it("reads the status again after a download attempt, and unlocks only when the server says so", async () => {
+      const { calls } = await open({
+        "GET /api/conversation": review(3, 3),
+        "GET /api/downloads": [downloads(false, false), downloads(true, true)],
+        "GET /api/canvas-file?format=pdf&revision=3": file(),
+      });
+      await screen.findByText(/Deleting is locked/);
+      expect(deleteButton()).not.toBeInTheDocument();
+      await chooseDownload("Download canvas", "PDF");
       await waitFor(() => expect(saved).toHaveLength(1));
-      expect(saved[0].download).toBe(`plan-on-a-page-appendix.${format}`);
-      expect(calls.some((c) => c.key === `GET /api/appendix?format=${format}`)).toBe(true);
-      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: /^Delete my session/ })).toBeInTheDocument();
+      expect(reads(calls)).toBeGreaterThanOrEqual(2);
     });
 
-    it("explains a refusal in fixed words and never shows what the server said", async () => {
-      await open(() => envelope("canvas_not_ready", 409));
-      await chooseDownload("Download appendix", "PDF");
-      expect(await screen.findByRole("alert")).toHaveTextContent("The canvas is not complete yet");
-      expect(screen.queryByText(/SERVER-TEXT-MUST-NEVER-RENDER/)).not.toBeInTheDocument();
-      expect(saved).toHaveLength(0);
+    it("does not unlock deleting just because a download was clicked", async () => {
+      await open({
+        "GET /api/conversation": review(3, 3),
+        "GET /api/downloads": downloads(false, false), // the server has not finished sending anything
+        "GET /api/canvas-file?format=pdf&revision=3": file(),
+      });
+      await screen.findByText(/Deleting is locked/);
+      await chooseDownload("Download canvas", "PDF");
+      await waitFor(() => expect(saved).toHaveLength(1));
+      await waitFor(() => expect(screen.getByText(/Deleting is locked/)).toBeInTheDocument());
+      expect(deleteButton()).not.toBeInTheDocument();
     });
 
-    it("says it could not be created for any other failure, and can be retried", async () => {
-      await open(() => envelope("appendix_failed", 500));
-      await chooseDownload("Download appendix", "Word (.docx)");
-      expect(await screen.findByRole("alert")).toHaveTextContent("The appendix could not be created");
-      expect(screen.getByRole("button", { name: /^Download appendix/ })).toBeEnabled();
+    it("re-reads the canvas when the status belongs to a newer revision", async () => {
+      await open({
+        "GET /api/conversation": [review(3, 3), review(4, null)],
+        "GET /api/downloads": downloads(true, true, 4), // answered again in another tab
+      });
+      expect(await screen.findByRole("alert")).toHaveTextContent("The canvas changed since it was shown");
+      await waitFor(() => expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument());
+      expect(statusCard()).not.toBeInTheDocument();
+      expect(deleteButton()).not.toBeInTheDocument();
     });
 
-    it("returns to entry when the session has ended", async () => {
-      await open(() => envelope("unauthenticated", 401));
-      await chooseDownload("Download appendix", "JSON");
+    it("deletes after confirmation, then returns to entry saying the session was deleted", async () => {
+      const { calls } = await open({
+        "GET /api/conversation": review(3, 3),
+        "GET /api/downloads": downloads(true, true),
+        "POST /api/session/purge": () => new Response(null, { status: 204 }),
+        "GET /api/access-state": () => json({ start_permitted: false }),
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /^Delete my session/ }));
+      await userEvent.click(screen.getByRole("button", { name: "Yes, delete everything" }));
       await waitFor(() => expect(window.location.pathname).toBe("/"));
+      expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/session/purge")!.init?.body))).toEqual({ revision: 3 });
+      expect(await screen.findByRole("status")).toHaveTextContent("Your session was deleted");
     });
 
-    it("only offers one download at a time", async () => {
-      let release!: () => void;
-      await open(() => new Promise<Response>((resolve) => (release = () => resolve(file()))));
-      await chooseDownload("Download appendix", "PDF");
-      expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled(); // one download at a time
-      release();
-      await waitFor(() => expect(screen.getByRole("button", { name: /^Download appendix/ })).toBeEnabled());
+    it("keeps the user on the page, with fixed guidance, if the server refuses", async () => {
+      await open({
+        "GET /api/conversation": review(3, 3),
+        "GET /api/downloads": downloads(true, true),
+        "POST /api/session/purge": () => envelope("purge_locked", 409),
+      });
+      await userEvent.click(await screen.findByRole("button", { name: /^Delete my session/ }));
+      await userEvent.click(screen.getByRole("button", { name: "Yes, delete everything" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("Deleting is still locked");
+      expect(window.location.pathname).toBe("/review");
+    });
+  });
+
+  describe("sending by email", () => {
+    // The toolbar button comes first on the page; the open form has a second one of the same name.
+    const mailButton = () => screen.queryAllByRole("button", { name: "Send email" })[0] ?? null;
+    const emailForm = () => screen.queryByRole("heading", { level: 2, name: "Send by email" });
+    // The form has its own "Send email" button; the one in the toolbar opens the form.
+    const submitEmail = () =>
+      userEvent.click(within(emailForm()!.closest("section")!).getByRole("button", { name: "Send email" }));
+
+    it("offers no email before the canvas is confirmed", async () => {
+      await open({ "GET /api/conversation": review(3, null) });
+      expect(mailButton()).not.toBeInTheDocument();
+      expect(emailForm()).not.toBeInTheDocument();
     });
 
-    it("is not offered while the canvas is incomplete", async () => {
-      mockApi({ "GET /api/session": SIGNED_IN, "GET /api/conversation": () => json(NOT_READY) });
-      at("/review");
-      render(<App />);
-      await screen.findByText("Your canvas is not complete yet");
-      expect(screen.queryByRole("button", { name: /Download appendix/ })).not.toBeInTheDocument();
+    it("offers it for the confirmed revision, and opens and closes the form without sending anything", async () => {
+      const { calls } = await open({ "GET /api/conversation": review(3, 3) });
+      expect(emailForm()).not.toBeInTheDocument();
+      await userEvent.click(mailButton()!);
+      expect(emailForm()).toBeInTheDocument();
+      expect(mailButton()).toHaveAttribute("aria-expanded", "true");
+      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(emailForm()).not.toBeInTheDocument();
+      expect(mailButton()).toHaveFocus();
+      expect(calls.some((c) => c.key === "POST /api/email")).toBe(false);
+    });
+
+    it("sends the confirmed revision and says who it went to", async () => {
+      const { calls } = await open({
+        "GET /api/conversation": review(3, 3),
+        "POST /api/email": () => json({ sent: 1 }),
+      });
+      await userEvent.click(mailButton()!);
+      await userEvent.type(screen.getByLabelText("To"), "someone@example.com");
+      await submitEmail();
+      expect(await screen.findByText(/^Sent to someone@example.com/)).toBeInTheDocument();
+      expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/email")!.init?.body))).toMatchObject({ revision: 3 });
+    });
+
+    it("re-reads the canvas and drops the email and download buttons when the confirmation no longer applies", async () => {
+      await open({
+        "GET /api/conversation": [review(3, 3), review(4, 3)],
+        "POST /api/email": () => envelope("revision_conflict", 409),
+      });
+      await userEvent.click(mailButton()!);
+      await userEvent.type(screen.getByLabelText("To"), "someone@example.com");
+      await submitEmail();
+      expect(await screen.findByRole("alert")).toHaveTextContent("The canvas changed since it was shown");
+      await waitFor(() => expect(mailButton()).not.toBeInTheDocument());
+      expect(emailForm()).not.toBeInTheDocument();
+      expect(menus()).toHaveLength(0);
+      expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument();
+    });
+
+    it("returns to entry when the session ended while sending", async () => {
+      await open({
+        "GET /api/conversation": review(3, 3),
+        "POST /api/email": () => envelope("unauthenticated", 401),
+      });
+      await userEvent.click(mailButton()!);
+      await userEvent.type(screen.getByLabelText("To"), "someone@example.com");
+      await submitEmail();
+      await waitFor(() => expect(window.location.pathname).toBe("/"));
     });
   });
 

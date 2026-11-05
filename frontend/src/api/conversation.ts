@@ -26,6 +26,9 @@ export interface Conversation {
   turns: Turn[];
   canvas?: CanvasView;
   progression?: Progression;
+  // The revision the user confirmed in the read-back, or null. It counts only while it equals
+  // `revision`: any later answer moves `revision` on, which ends the confirmation.
+  confirmed_revision?: number | null;
 }
 
 export interface Submission {
@@ -41,6 +44,11 @@ export type ReplyEvent =
 
 export function getConversation(signal?: AbortSignal): Promise<Conversation> {
   return apiRequest<Conversation>("/api/conversation", { signal });
+}
+
+// The user confirms the revision they read back. Returns the refreshed review.
+export function confirmCanvas(revision: number, signal?: AbortSignal): Promise<Conversation> {
+  return apiRequest<Conversation>("/api/canvas/confirm", { method: "POST", csrf: true, signal, body: { revision } });
 }
 
 // `submissionId` identifies this answer: reusing it on a retry can never record it twice.

@@ -7,7 +7,7 @@ from pptx import Presentation
 
 from app.canvas_export import PPTX_MEDIA_TYPE, render_canvas_pptx
 from tests.appendix.test_appendix_api import appendix as _appendix  # noqa: F401  (shared helpers)
-from tests.appendix.test_appendix_api import finish
+from tests.appendix.test_appendix_api import finish, finish_confirmed
 from tests.interview.conftest import OPENING, browser
 from tests.interview.test_interview_api import history, wire
 
@@ -135,8 +135,9 @@ def test_a_canvas_without_types_or_priority_still_renders():
 # --- the download -----------------------------------------------------------------------------------
 
 
-def canvas_file(client):
-    return client.get("/api/canvas-file", params={"format": "pptx"})
+def canvas_file(client, fmt="pptx", revision=None):
+    revision = history(client)["revision"] if revision is None else revision
+    return client.get("/api/canvas-file", params={"format": fmt, "revision": revision})
 
 
 def test_an_incomplete_canvas_cannot_be_downloaded_as_a_deck(world):
@@ -153,11 +154,13 @@ def test_an_incomplete_canvas_cannot_be_downloaded_as_a_deck(world):
 def test_a_ready_canvas_downloads_as_a_deck_matching_the_stored_draft(world):
     wire(world)
     client = browser(world)
-    data = finish(client)
+    data = finish_confirmed(client)
     response = canvas_file(client)
     assert response.status_code == 200
     assert response.headers["content-type"].startswith(PPTX_MEDIA_TYPE)
-    assert response.headers["content-disposition"] == 'attachment; filename="plan-on-a-page.pptx"'
+    assert response.headers["content-disposition"] == (
+        f'attachment; filename="shift-notes-assistant-canvas-r{data["revision"]}.pptx"'
+    )
     assert response.headers["cache-control"] == "no-store"
     text = slide_text(open_deck(response.content).slides[0])
     for key, value in data["canvas"]["fields"].items():
@@ -169,10 +172,14 @@ def test_a_ready_canvas_downloads_as_a_deck_matching_the_stored_draft(world):
 def test_the_deck_needs_a_session_and_a_known_format(world):
     wire(world)
     client = browser(world)
-    finish(client)
-    assert 400 <= client.get("/api/canvas-file", params={"format": "exe"}).status_code < 500
+    finish_confirmed(client)
+    assert 400 <= canvas_file(client, "exe").status_code < 500
+    assert (
+        400 <= client.get("/api/canvas-file", params={"format": "pdf"}).status_code < 500
+    )  # no revision
+    revision = history(client)["revision"]
     client.cookies.clear()
-    assert canvas_file(client).status_code == 401
+    assert canvas_file(client, "pptx", revision).status_code == 401
 
 
 def test_one_session_never_gets_anothers_deck(world):
@@ -187,4 +194,4 @@ def test_the_appendix_routes_are_unaffected(world, fmt):
     wire(world)
     client = browser(world)
     finish(client)
-    assert _appendix(client, fmt).status_code == 200
+    assert _appendix(client, fmt).status_code == 409  # not confirmed yet
