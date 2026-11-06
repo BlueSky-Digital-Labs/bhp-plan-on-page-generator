@@ -67,6 +67,7 @@ def test_a_bedrock_role_replaces_the_resource_arns():
         # full profile (BASE): the tasks have no route to STS
         ({"bedrock_role_arn": BEDROCK_ROLE, "bedrock_model_id": "m"}, "minimal profile"),
         ({"env": "prod"}, "alarm_email"),
+        ({"bedrock_log_error_text": "maybe"}, "bedrock_log_error_text"),
         ({"alarm_email": "nope"}, "alarm_email"),
         ({"enable_email": "true"}, "ses_identity_arn"),
         ({"enable_email": "yes"}, "enable_email"),

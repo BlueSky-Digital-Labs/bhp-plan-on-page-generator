@@ -214,7 +214,7 @@ everything in the register below.
 
 | Model / profile id | Kind | Client regions | All inference destinations | Capabilities | Privacy evidence | Verified on / by | Smoke test from private task |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `au.anthropic.claude-sonnet-5-5` | inference profile | ap-southeast-2 | ap-southeast-2, ap-southeast-4 (from `get-inference-profile`) | streaming (confirmed); tool use and forced tool choice **not verified**, asserted for a functional test | **NOT VERIFIED** | 2026-11-05, local tester, shared test account | not run. **TEST-ONLY, not release evidence** |
+| `au.anthropic.claude-sonnet-5-5` | inference profile | ap-southeast-2 | ap-southeast-2, ap-southeast-4 (from `get-inference-profile`) | streaming (confirmed); tool use **not verified**, asserted for a functional test; no forced tool choice (the first real call with it was refused as `invalid_request`, 2026-11-06) | **NOT VERIFIED** | 2026-11-05, local tester, shared test account | not run. **TEST-ONLY, not release evidence** |
 | `openai.gpt-oss-120b-1:0` | foundation model | ap-southeast-2 | ap-southeast-2 (direct id, processed in the client region) | streaming (confirmed); tool use **not verified**; no forced tool choice | **NOT VERIFIED** | 2026-11-05, local tester, shared test account | not run. **TEST-ONLY, not release evidence** |
 
 Both rows above are **test-only entries for the shared test account**: they let the deployed app use

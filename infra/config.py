@@ -55,6 +55,9 @@ bedrock_role_arn          service        none                     Role in anothe
                                                                   role then has no Bedrock actions,
                                                                   so no resource ARNs are needed.
                                                                   Must match backend/aws-config.
+bedrock_log_error_text    service        false                    Log the short text of Bedrock's
+                                                                  validation errors. Test only: it
+                                                                  can quote request content.
 bedrock_region            service        region                   Must equal region.
 app_name                  service        Plan on a Page           On-screen name, 1 to 80 chars.
 header_text               service        Plan on a Page           Text beside the logo.
@@ -181,6 +184,7 @@ class Config:
     bedrock_model_id: str | None
     bedrock_resource_arns: tuple[str, ...]
     bedrock_role_arn: str | None
+    bedrock_log_error_text: bool
     bedrock_region: str
     app_name: str
     header_text: str
@@ -354,6 +358,7 @@ class Config:
             bedrock_model_id=model_id,
             bedrock_resource_arns=bedrock_arns,
             bedrock_role_arn=bedrock_role_arn,
+            bedrock_log_error_text=_bool(get, "bedrock_log_error_text"),
             bedrock_region=bedrock_region,
             app_name=_branding(get, "app_name", "Plan on a Page"),
             header_text=_branding(get, "header_text", "Plan on a Page"),

@@ -347,6 +347,12 @@ SNS, CloudWatch alarm, Budgets, autoscaling and Route 53 permissions are **full-
      same: synthesis fails if they differ, so change both and redeploy (the image is rebuilt).
      Minimal profile only, because the full profile has no route to STS. Prompts and replies
      cross into the other account, which is a privacy decision for whoever approves the model.
+   * **When a model call fails**, the `converse_stream_finished` line in `/plan/<env>/web` carries
+     `failure_code`, `exception_type` (the AWS error code), `http_status`, `request_id` and
+     `request_shape` (which parts the request had, never their content). To also log Bedrock's own
+     short message for a `ValidationException`, set the GitHub variable `BEDROCK_LOG_ERROR_TEXT=true`
+     and redeploy. That text can quote part of the request, so it is for the test deployment only:
+     unset it afterwards and never use it with real data.
 5. **Deploy the GitHub trust stack once** (administrator, by hand):
    ```bash
    cd infra && npx aws-cdk@2.1147.0 deploy plan-github-oidc

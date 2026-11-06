@@ -2,7 +2,7 @@ import dataclasses
 import logging
 
 import pytest
-from botocore.exceptions import ConnectTimeoutError, ReadTimeoutError
+from botocore.exceptions import ClientError, ConnectTimeoutError, ReadTimeoutError
 from pydantic import BaseModel, ConfigDict
 
 from app.ai import (
@@ -460,3 +460,52 @@ def test_an_unknown_tool_name_is_reported_only_if_it_looks_like_an_identifier(co
 def test_rejection_detail_does_not_change_event_equality(config_a):
     rejected = _rejection(config_a, tool_events("tu-1", "write_field", {"title": "x"}))
     assert rejected == ToolInputRejected("tu-1", ToolRejection.SCHEMA_VIOLATION)
+
+
+# --- diagnostics: what a failed call logs ---------------------------------------------
+
+
+def _finished_log(caplog):
+    return next(r for r in caplog.records if r.getMessage() == "converse_stream_finished")
+
+
+def test_a_failed_call_logs_the_code_status_request_id_and_request_shape(config_a, caplog):
+    caplog.set_level("INFO", logger="app.ai")
+    _, adapter = run(config_a, raise_on_call=client_error("ValidationException"))
+    adapter.collect(REQUEST)
+    record = _finished_log(caplog)
+    assert (record.exception_type, record.http_status, record.request_id) == (
+        "ValidationException",
+        400,
+        "req-123",
+    )
+    assert record.request_shape.startswith("messages=1 system=1 tools=")
+    assert "tool_choice=none" in record.request_shape
+    assert SECRET not in repr(vars(record))
+    assert not hasattr(record, "error_text")
+
+
+def test_error_text_is_logged_only_when_opted_in_and_only_for_validation_errors(
+    config_a, caplog, monkeypatch
+):
+    caplog.set_level("INFO", logger="app.ai")
+    monkeypatch.setenv("BEDROCK_LOG_ERROR_TEXT", "true")
+    message = "toolChoice\n is not supported " + "x" * 500
+    for code, expected in (("ValidationException", True), ("AccessDeniedException", False)):
+        caplog.clear()
+        error = ClientError(aws_error(code, message=message), "ConverseStream")
+        _, adapter = run(config_a, raise_on_call=error)
+        adapter.collect(REQUEST)
+        record = _finished_log(caplog)
+        assert hasattr(record, "error_text") is expected
+        if expected:
+            assert record.error_text.startswith("toolChoice is not supported")
+            assert len(record.error_text) == 300 and "\n" not in record.error_text
+
+
+def test_error_text_stays_off_unless_exactly_enabled(config_a, caplog, monkeypatch):
+    caplog.set_level("INFO", logger="app.ai")
+    monkeypatch.setenv("BEDROCK_LOG_ERROR_TEXT", "no")
+    _, adapter = run(config_a, raise_on_call=client_error("ValidationException"))
+    adapter.collect(REQUEST)
+    assert not hasattr(_finished_log(caplog), "error_text")

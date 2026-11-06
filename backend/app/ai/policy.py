@@ -115,9 +115,7 @@ APPROVED_SELECTIONS: tuple[ApprovedSelection, ...] = (
         foundation_model_ids=("anthropic.claude-sonnet-5-5",),
         client_regions=("ap-southeast-2",),
         inference_regions=("ap-southeast-2", "ap-southeast-4"),
-        capabilities=frozenset(
-            {Capability.CONVERSE_STREAM, Capability.TOOL_USE, Capability.FORCED_TOOL_CHOICE}
-        ),
+        capabilities=frozenset({Capability.CONVERSE_STREAM, Capability.TOOL_USE}),
         evidence=Evidence(
             verified_on=_SHARED_ACCOUNT_TEST,
             verified_by="local tester (shared test account)",
@@ -132,9 +130,11 @@ APPROVED_SELECTIONS: tuple[ApprovedSelection, ...] = (
             ),
             capabilities=(
                 "Streaming confirmed (get-foundation-model responseStreamingSupported=true). Tool "
-                "use and forced tool choice NOT verified from the Converse features table: "
-                "asserted for a functional test and proven only by running the interview or "
-                "python -m app.ai.smoke. Limits are deliberately conservative, not from the docs."
+                "use NOT verified from the Converse features table: asserted for a functional "
+                "test and proven only by running the interview or python -m app.ai.smoke. Forced "
+                "tool choice is not claimed: the first real call with it was refused as "
+                "invalid_request, so the model is left to choose the tool. Limits are "
+                "deliberately conservative, not from the docs."
             ),
             sources=(
                 "aws bedrock get-inference-profile (shared test account, 2026-11-05)",

@@ -325,6 +325,21 @@ def test_a_bedrock_role_is_assumed_and_the_web_role_has_no_bedrock_actions_of_it
     assert "BEDROCK_PROFILE" not in sweeper_env and "AWS_CONFIG_FILE" not in sweeper_env
 
 
+def test_bedrock_error_text_logging_is_off_unless_asked_for(m):
+    assert "BEDROCK_LOG_ERROR_TEXT" not in env_of(container(m.service, "plan-test-web")[1])
+    on = minimal(
+        bedrock_model_id="au.example-model-v1:0",
+        bedrock_resource_arns=BEDROCK_ARNS,
+        bedrock_log_error_text="true",
+    )
+    assert env_of(container(on.service, "plan-test-web")[1])["BEDROCK_LOG_ERROR_TEXT"] == "true"
+    assert "BEDROCK_LOG_ERROR_TEXT" not in env_of(container(on.service, "plan-test-sweeper")[1])
+    warnings = Annotations.from_stack(on.service_stack).find_warning(
+        "*", Match.string_like_regexp("error text|validation errors")
+    )
+    assert warnings
+
+
 def test_the_role_must_match_the_one_baked_into_the_image():
     other = "arn:aws:iam::667736131634:role/someone-else"
     with pytest.raises(ValueError, match="aws-config"):

@@ -50,7 +50,7 @@ def test_production_registry_holds_only_the_two_test_only_entries():
     assert codes(cfg(), None).codes == ("unapproved_model",)  # any other model is still refused
 
 
-def test_the_sonnet_profile_can_be_selected_with_conservative_settings():
+def test_the_sonnet_profile_can_be_selected_but_does_not_claim_forced_tool_choice():
     config = BedrockConfig(
         region="ap-southeast-2",
         model_id="au.anthropic.claude-sonnet-5-5",
@@ -58,7 +58,8 @@ def test_the_sonnet_profile_can_be_selected_with_conservative_settings():
     )
     chosen = validate_bedrock_config(config).selection
     assert chosen.model_id == "au.anthropic.claude-sonnet-5-5"
-    assert Capability.FORCED_TOOL_CHOICE in chosen.capabilities
+    assert Capability.TOOL_USE in chosen.capabilities
+    assert Capability.FORCED_TOOL_CHOICE not in chosen.capabilities
 
 
 def test_the_gpt_oss_model_can_be_selected_but_does_not_claim_forced_tool_choice():

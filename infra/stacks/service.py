@@ -76,6 +76,11 @@ class ServiceStack(Stack):
         image_tag = config.require_image_tag()  # fail at synth, before anything is deployed
         if config.bedrock_role_arn:
             self._check_bedrock_profile(config.bedrock_role_arn)
+        if config.bedrock_model_id and config.bedrock_log_error_text:
+            Annotations.of(self).add_warning(
+                "bedrock_log_error_text=true: the text of Bedrock's validation errors goes to "
+                "CloudWatch Logs and can quote request content. Test only; unset it afterwards."
+            )
         if config.enable_email and not config.minimal:
             Annotations.of(self).add_warning(
                 "enable_email=true, but the tasks have no route to the SES API (private isolated "
@@ -350,6 +355,8 @@ class ServiceStack(Stack):
             env["BEDROCK_REGION"] = cfg.bedrock_region
             env["BEDROCK_MODEL_ID"] = cfg.bedrock_model_id
             env["BEDROCK_MAX_TOKENS"] = "1024"
+        if cfg.bedrock_model_id and cfg.bedrock_log_error_text:
+            env["BEDROCK_LOG_ERROR_TEXT"] = "true"
         if cfg.bedrock_role_arn:
             env["AWS_CONFIG_FILE"] = AWS_CONFIG_FILE
             env["BEDROCK_PROFILE"] = BEDROCK_PROFILE
