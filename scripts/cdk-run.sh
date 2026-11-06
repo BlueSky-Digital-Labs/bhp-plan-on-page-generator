@@ -44,6 +44,7 @@ add ses_identity_arn SES_IDENTITY_ARN
 add email_sender_address EMAIL_SENDER_ADDRESS
 add email_allowed_domains EMAIL_ALLOWED_DOMAINS
 add ses_region SES_REGION
+add email_log_error_text EMAIL_LOG_ERROR_TEXT
 add rate_limit_sensitive RATE_LIMIT_SENSITIVE
 add rate_limit_general RATE_LIMIT_GENERAL
 

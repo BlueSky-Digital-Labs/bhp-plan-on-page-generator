@@ -76,6 +76,11 @@ class ServiceStack(Stack):
         image_tag = config.require_image_tag()  # fail at synth, before anything is deployed
         if config.bedrock_role_arn:
             self._check_bedrock_profile(config.bedrock_role_arn)
+        if config.enable_email and config.email_log_error_text:
+            Annotations.of(self).add_warning(
+                "email_log_error_text=true: AWS's text for a denied send goes to CloudWatch Logs "
+                "and can include an address. Test only; unset it afterwards."
+            )
         if config.bedrock_model_id and config.bedrock_log_error_text:
             Annotations.of(self).add_warning(
                 "bedrock_log_error_text=true: the text of Bedrock's validation errors goes to "
@@ -364,6 +369,8 @@ class ServiceStack(Stack):
             env["EMAIL_SENDER_ADDRESS"] = cfg.email_sender_address or ""
             env["EMAIL_ALLOWED_DOMAINS"] = ",".join(cfg.email_allowed_domains)
             env["SES_REGION"] = cfg.ses_region
+            if cfg.email_log_error_text:
+                env["EMAIL_LOG_ERROR_TEXT"] = "true"
         return env
 
     def _task_definition(

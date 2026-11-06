@@ -353,6 +353,11 @@ SNS, CloudWatch alarm, Budgets, autoscaling and Route 53 permissions are **full-
      short message for a `ValidationException`, set the GitHub variable `BEDROCK_LOG_ERROR_TEXT=true`
      and redeploy. That text can quote part of the request, so it is for the test deployment only:
      unset it afterwards and never use it with real data.
+   * **When an email send is denied** (`email_send_failed`, `AccessDeniedException`), the app does
+     not log AWS's reason. Set the GitHub variable `EMAIL_LOG_ERROR_TEXT=true` and redeploy to add
+     it to that log line as `error_text` (the role, the action, the resource and whether a service
+     control policy denied it). It can include an address, so it is for the test deployment only:
+     unset it afterwards.
 5. **Deploy the GitHub trust stack once** (administrator, by hand):
    ```bash
    cd infra && npx aws-cdk@2.1147.0 deploy plan-github-oidc

@@ -78,6 +78,9 @@ email_sender_address      with email     none                     Sender, also t
                                                                   condition.
 email_allowed_domains     with email     none                     Comma-separated domains.
 ses_region                with email     region                   SES region.
+email_log_error_text      with email     false                    Log AWS's text for a denied send.
+                                                                  Test only: it can include an
+                                                                  address.
 github_repo               oidc           BlueSky-Digital-Labs/    `owner/name` allowed to assume
                                          bhp-plan-on-page-        the deploy roles.
                                          generator
@@ -198,6 +201,7 @@ class Config:
     email_sender_address: str | None
     email_allowed_domains: tuple[str, ...]
     ses_region: str
+    email_log_error_text: bool
 
     @property
     def minimal(self) -> bool:
@@ -372,6 +376,7 @@ class Config:
             email_sender_address=sender,
             email_allowed_domains=domains,
             ses_region=_text(get, "ses_region", region) or region,
+            email_log_error_text=_bool(get, "email_log_error_text"),
         )
 
 

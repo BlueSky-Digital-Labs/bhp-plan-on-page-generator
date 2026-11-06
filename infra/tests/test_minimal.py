@@ -340,6 +340,20 @@ def test_bedrock_error_text_logging_is_off_unless_asked_for(m):
     assert warnings
 
 
+def test_email_error_text_logging_is_off_unless_asked_for():
+    mail = {
+        "enable_email": "true",
+        "ses_identity_arn": "arn:aws:ses:ap-southeast-2:123456789012:identity/example.com",
+        "email_sender_address": "noreply@example.com",
+        "email_allowed_domains": "example.com",
+    }
+    off = minimal(**mail)
+    assert "EMAIL_LOG_ERROR_TEXT" not in env_of(container(off.service, "plan-test-web")[1])
+    on = minimal(**mail, email_log_error_text="true")
+    assert env_of(container(on.service, "plan-test-web")[1])["EMAIL_LOG_ERROR_TEXT"] == "true"
+    assert "EMAIL_LOG_ERROR_TEXT" not in env_of(container(on.service, "plan-test-sweeper")[1])
+
+
 def test_the_role_must_match_the_one_baked_into_the_image():
     other = "arn:aws:iam::667736131634:role/someone-else"
     with pytest.raises(ValueError, match="aws-config"):

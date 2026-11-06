@@ -83,6 +83,7 @@ jobs:
       SES_IDENTITY_ARN: ${{ vars.SES_IDENTITY_ARN }}
       EMAIL_SENDER_ADDRESS: ${{ vars.EMAIL_SENDER_ADDRESS }}
       EMAIL_ALLOWED_DOMAINS: ${{ vars.EMAIL_ALLOWED_DOMAINS }}
+      EMAIL_LOG_ERROR_TEXT: ${{ vars.EMAIL_LOG_ERROR_TEXT }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
