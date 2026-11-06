@@ -51,6 +51,7 @@ SWEEPER_ACTIONS_DDB = [
 KMS_ACTIONS = ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
 # Streaming only: ConverseStream is all the app calls (docs/bedrock.md forbids plain InvokeModel).
 BEDROCK_ACTIONS = ["bedrock:InvokeModelWithResponseStream"]
+SES_ACTIONS = ["ses:SendEmail", "ses:SendRawEmail"]
 # With bedrock_role_arn the web role calls Bedrock as a role in another account, through this
 # profile in the config file baked into the image (backend/aws-config).
 BEDROCK_PROFILE = "rnd-bedrock"
@@ -298,7 +299,9 @@ class ServiceStack(Stack):
             self.web_role.add_to_policy(
                 iam.PolicyStatement(
                     sid="SendFromOneAddress",
-                    actions=["ses:SendEmail"],
+                    # The app sends a raw MIME message (to attach the PDFs); SES authorises that
+                    # as ses:SendRawEmail as well as ses:SendEmail.
+                    actions=SES_ACTIONS,
                     resources=[cfg.ses_identity_arn],
                     conditions={"StringEquals": {"ses:FromAddress": cfg.email_sender_address}},
                 )

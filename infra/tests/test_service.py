@@ -506,7 +506,7 @@ def test_web_role_ses_only_when_enabled_and_conditioned_on_the_sender():
     stmt = next(
         x
         for x in role_statements(s.service, "plan-test-web-task")
-        if x["Action"] == "ses:SendEmail"
+        if as_list(x["Action"]) == ["ses:SendEmail", "ses:SendRawEmail"]
     )
     assert stmt["Resource"] == "arn:aws:ses:ap-southeast-2:123456789012:identity/plan.example.com"
     assert stmt["Condition"] == {"StringEquals": {"ses:FromAddress": "plan@example.com"}}

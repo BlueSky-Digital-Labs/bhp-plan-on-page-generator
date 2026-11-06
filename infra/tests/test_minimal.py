@@ -405,7 +405,11 @@ def test_email_is_allowed_and_not_flagged_because_tasks_have_internet():
     service = app.node.find_child("plan-test-service")
     assert not Annotations.from_stack(service).find_warning("*", Match.string_like_regexp("SES"))
     s = stacks(profile="", **{k: v for k, v in ctx.items() if k not in MINIMAL})
-    stmt = next(x for x in role_statements(s.service, ROLES[0]) if x["Action"] == "ses:SendEmail")
+    stmt = next(
+        x
+        for x in role_statements(s.service, ROLES[0])
+        if as_list(x["Action"]) == ["ses:SendEmail", "ses:SendRawEmail"]
+    )
     assert stmt["Condition"] == {"StringEquals": {"ses:FromAddress": "plan@example.com"}}
 
 
