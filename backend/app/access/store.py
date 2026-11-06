@@ -4,9 +4,10 @@ Sessions are keyed by an unpredictable server-generated id. `expires_at` is fixe
 creation (24 h) and is never extended. DynamoDB TTL removes expired items lazily (up to
 ~48 h later), so the application checks `expires_at` itself on every read.
 
-Table: partition key `session_id` (String); TTL attribute `expires_at` (epoch seconds).
-Grants use the same table under the key prefix `grant#`, which cannot collide with a
-session id (those are URL-safe base64 and contain no '#').
+Table: partition key `session_id` (String), sort key `sk` (String); TTL attribute `expires_at`
+(epoch seconds); the table is shared with the conversation content (see app/dynamo.py). A sign-in
+record is `sk = "ACCESS"`. Grants use the key prefix `grant#` (sk "GRANT"), which cannot collide
+with a session id (those are URL-safe base64 and contain no '#').
 """
 
 import threading
@@ -19,6 +20,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from app.access.errors import DependencyUnavailable
 
 _GRANT_PREFIX = "grant#"
+_ACCESS, _GRANT = "ACCESS", "GRANT"  # the sort key of each kind of record
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,7 @@ class DynamoSessionStore:
     def create(self, session: Session) -> None:
         item = {
             "session_id": {"S": session.session_id},
+            "sk": {"S": _ACCESS},
             "created_at": {"S": session.created_at.isoformat()},
             "expires_at": {"N": str(int(session.expires_at.timestamp()))},
         }
@@ -117,7 +120,7 @@ class DynamoSessionStore:
         try:
             response = self._client.get_item(
                 TableName=self._table,
-                Key={"session_id": {"S": session_id}},
+                Key={"session_id": {"S": session_id}, "sk": {"S": _ACCESS}},
                 ConsistentRead=True,
             )
         except (ClientError, BotoCoreError):
@@ -136,7 +139,9 @@ class DynamoSessionStore:
 
     def delete(self, session_id: str) -> None:
         try:
-            self._client.delete_item(TableName=self._table, Key={"session_id": {"S": session_id}})
+            self._client.delete_item(
+                TableName=self._table, Key={"session_id": {"S": session_id}, "sk": {"S": _ACCESS}}
+            )
         except (ClientError, BotoCoreError):
             raise DependencyUnavailable("store") from None
 
@@ -144,6 +149,7 @@ class DynamoSessionStore:
         return self._put_new(
             {
                 "session_id": {"S": _GRANT_PREFIX + grant_id},
+                "sk": {"S": _GRANT},
                 "expires_at": {"N": str(int(expires_at.timestamp()))},
             }
         )

@@ -22,6 +22,8 @@ export function mockApi(routes: Record<string, Handler | Handler[]>) {
   const calls: Array<{ key: string; init?: RequestInit }> = [];
   const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const key = `${init?.method ?? "GET"} ${String(input)}`;
+    // The page asks for its configured names on every start; tests only list it if they care.
+    if (key === "GET /api/branding" && !queues.has(key)) return json(DEFAULT_BRANDING_BODY);
     calls.push({ key, init });
     const queue = queues.get(key);
     if (!queue) throw new Error(`Unmocked request: ${key}`);
@@ -31,6 +33,8 @@ export function mockApi(routes: Record<string, Handler | Handler[]>) {
   vi.stubGlobal("fetch", fn);
   return { fn, calls };
 }
+
+export const DEFAULT_BRANDING_BODY = { app_name: "Plan on a Page", header_text: "Plan on a Page", footer_text: "BHP" };
 
 export const csrfRoute = () => json({ csrf_token: "test-csrf-token" });
 

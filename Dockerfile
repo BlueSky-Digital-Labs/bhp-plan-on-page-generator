@@ -27,6 +27,8 @@ COPY backend/pyproject.toml backend/uv.lock backend/.python-version ./
 RUN uv sync --frozen --no-dev
 
 COPY backend/app ./app
+# Used only when the deployment sets AWS_CONFIG_FILE and BEDROCK_PROFILE (infra bedrock_role_arn).
+COPY backend/aws-config ./aws-config
 COPY --from=frontend-build /build/dist ./static
 
 # Only the asset location is baked in. APP_ENV is intentionally NOT set here: the

@@ -65,15 +65,18 @@ that are missing):
 | `ACCESS_CODE_HASH_SECRET_ID` | Secrets Manager secret holding the Argon2 hash (plain `SecretString`). |
 | `COOKIE_SIGNING_KEY_SECRET_ID` | Secrets Manager secret holding the cookie-signing key (`SecretString`, at least 32 characters). |
 
-Secret **values** are never configuration: they live in Secrets Manager and are read
-through the workload role.
+Secret **values** are never configuration: they live in Secrets Manager (or, with
+`SECRETS_BACKEND=parameterstore`, as SecureString parameters in Systems Manager Parameter Store) and are
+read through the workload role.
 
 ### DynamoDB table
 
-Partition key `session_id` (String). **Enable TTL on the attribute `expires_at`** (epoch
+Partition key `session_id` (String) and sort key `sk` (String): the same table also holds the
+conversation content (layout in `backend/app/dynamo.py`; `infra/` creates it). **Enable TTL on the attribute `expires_at`** (epoch
 seconds). TTL deletion is lazy (up to about 48 h later), so the application checks
-`expires_at` itself and the scheduled expiry worker is a separate ticket. Encrypt with the
-customer-managed KMS key.
+`expires_at` itself, and the scheduled sweep ([expiry.md](expiry.md)) removes sessions at 24 h.
+Add the sparse global index `expiry-index` (partition `gsi_pk`, sort `expires_at`, keys only). Encrypt
+with the customer-managed KMS key.
 
 ### Workload role permissions (add to the task role; nothing broader)
 
@@ -91,8 +94,19 @@ customer-managed KMS key.
     },
     {
       "Effect": "Allow",
-      "Action": ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:DeleteItem"],
-      "Resource": "arn:aws:dynamodb:ap-southeast-2:<account-id>:table/<sessions-table>"
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:Query"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:ap-southeast-2:<account-id>:table/<sessions-table>",
+        "arn:aws:dynamodb:ap-southeast-2:<account-id>:table/<sessions-table>/index/expiry-index"
+      ]
     }
   ]
 }

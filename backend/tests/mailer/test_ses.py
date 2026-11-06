@@ -127,3 +127,51 @@ def test_failures_are_logged_without_addresses_or_text(client):
     text = repr([r.__dict__ for r in records])
     assert "example.com" not in text and "SECRET-NOTE" not in text and "Idea" not in text
     assert records[0].failure_code == "MessageRejected"
+
+
+def _failed_log(client, code, message, monkeypatch, flag):
+    if flag is not None:
+        monkeypatch.setenv("EMAIL_LOG_ERROR_TEXT", flag)
+    records: list[logging.LogRecord] = []
+
+    class Collect(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    logger = logging.getLogger("app.mailer")
+    handler = Collect()
+    logger.addHandler(handler)
+    try:
+        with Stubber(client) as stub:
+            stub.add_client_error(
+                "send_email", service_error_code=code, service_message=message, http_status_code=403
+            )
+            with pytest.raises(MailerError):
+                SesMailer(client, "noreply@example.com").send(EMAIL)
+    finally:
+        logger.removeHandler(handler)
+    return records[0]
+
+
+def test_a_failure_logs_the_http_status_and_request_id_field(client):
+    record = _failed_log(client, "AccessDeniedException", "SECRET-TEXT", None, None)
+    assert record.http_status == 403 and hasattr(record, "request_id")
+    assert not hasattr(record, "error_text") and "SECRET-TEXT" not in repr(record.__dict__)
+
+
+def test_access_denied_text_is_logged_only_when_opted_in(client, monkeypatch):
+    message = (
+        "role x is not authorized to perform ses:SendEmail\nwith an explicit deny " + "y" * 600
+    )
+    record = _failed_log(client, "AccessDeniedException", message, monkeypatch, "true")
+    assert record.error_text.startswith("role x is not authorized to perform ses:SendEmail with")
+    assert len(record.error_text) == 400 and "\n" not in record.error_text
+
+
+@pytest.mark.parametrize(
+    ("code", "flag"),
+    [("AccessDeniedException", "no"), ("MessageRejected", "true")],
+)
+def test_no_text_for_other_errors_or_unless_exactly_true(client, monkeypatch, code, flag):
+    record = _failed_log(client, code, "a@example.com SECRET-TEXT", monkeypatch, flag)
+    assert not hasattr(record, "error_text")

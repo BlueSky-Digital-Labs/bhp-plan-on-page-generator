@@ -67,34 +67,42 @@ confirmation. The page:
   different revision (another tab answered);
 * returns to entry if the session ended, and shows fixed text for every failure.
 
-## Where the records live, and moving to DynamoDB
+## Where the records live
 
-Everything above runs on in-memory stores locally and in tests; deployed runs still fail closed
-because there is no durable store (`UnavailableConversationStore`, `UnavailableDeliveryStore`).
-The stores were shaped so that a DynamoDB version is an implementation change, not a redesign:
+Locally and in tests everything is in this process's memory. **Deployed, everything is in one
+DynamoDB table** (`SESSIONS_TABLE_NAME`), so any task can serve any request and a delete, purge or
+expiry removes it all. The table layout (keys, item types, the sparse expiry index, TTL) is documented
+in `backend/app/dynamo.py`, and `infra/` creates exactly that table; the tests build it from the same
+definition, so the code and the table cannot drift apart unnoticed.
 
-| Store | Operations (the whole contract) |
-| --- | --- |
-| Delivery (`DeliveryStore`) | `record` (idempotent, never goes to an older revision), `get`, `delete_session` |
-| Conversation | `history`, `submit` (revision-checked), `get_turn`, `complete_turn`, `mark`, `delete_session`, `delete_session_if_revision`, `expired_session_ids(now, limit, after)` |
-| Interview state | `get`, `put`, `confirm`, `delete_session` |
+| Store | In memory | DynamoDB | What it holds |
+| --- | --- | --- | --- |
+| Sign-in (`SessionStore`) | `InMemorySessionStore` | `DynamoSessionStore` | `ACCESS` and `GRANT` items |
+| Conversation | `InMemoryConversationStore` | `DynamoConversationStore` | one `CONV` item, one `TURN#nnnn` item per turn |
+| Interview state | `InMemoryInterviewStore` | `DynamoInterviewStore` | one `INTERVIEW` item (the draft as JSON) |
+| Delivery | `InMemoryDeliveryStore` | `DynamoDeliveryStore` | `DELIVERY#canvas`, `DELIVERY#appendix` |
 
-Suggested table layout (one table, partition key `session_id`, TTL attribute `expires_at`):
+How the DynamoDB versions keep the in-memory behaviour:
 
-* `META` item: revision, confirmed revision, interview state, `expires_at`. Turns are **separate
-  items** (`TURN#0001`, …) so a long conversation with attached files never meets the 400 KB item
-  limit. Delivery records are items `DELIVERY#canvas` and `DELIVERY#appendix`, written with a
-  condition "attribute missing or revision less than this one" (that is `record`).
-* Every read that feeds the gate is a **strongly consistent** read.
-* `delete_session_if_revision` becomes a conditional update on `META` (revision equals the value
-  shown) that also sets a `purging` flag; every write (`submit`, `complete_turn`) is conditional on
-  that flag being absent, so no content is written once deleting has begun. The items are then
-  deleted in batches, and the whole step is safe to repeat if it is interrupted.
-* `expired_session_ids` reads a sparse index (a GSI on `META` items only, keyed by a constant and
-  sorted by `expires_at`) that holds ids and times, never content. That index is also what lets the
-  expiry sweep find sessions even after TTL has removed a primary record.
-* Items expire with their session (`expires_at` is fixed at creation, 24 hours); TTL is lazy
-  (it can lag by up to about two days), so the application checks `expires_at` itself.
+* An answer is **one transaction** (the `CONV` item's revision plus both new turns), conditional on
+  the revision the user was shown, no reply still open and no deletion started. Two tasks answering
+  at once cannot both win, and a retried answer (same submission id) is recorded once.
+* A reply is committed in one transaction (turn complete, open turn cleared), set-once.
+* `delete_session_if_revision` first sets a `purging` flag on `CONV` in one conditional step (only if
+  the revision is unchanged), after which no answer or reply can be written; the items are then
+  deleted in batches. If that is interrupted, asking again finishes it.
+* A delivery record is one conditional write ("nothing held, or this revision is newer").
+* Every read that feeds the gate is **strongly consistent**; turns are separate items so a long
+  conversation with attached files never meets the 400 KB item limit.
+* `expired_session_ids` reads the sparse `expiry-index` (only `CONV` items are in it: ids and times,
+  never content), so the sweep still finds a session whose sign-in record TTL has already removed.
+* A storage failure is always one fixed error (503, nothing changed); a record that does not parse
+  (a corrupt draft) fails closed and is never replaced by a blank one.
+
+The same behaviour checks run against both: `tests/dynamo/test_stores_contract.py` runs one set of
+store checks on each, and the whole download-status/purge suite, the interview journey and the
+confirmation tests are run once on memory and once on DynamoDB (`store_kind` in `tests/conftest.py`).
+DynamoDB itself is simulated with `moto`.
 
 ## Limits
 
@@ -102,4 +110,11 @@ Suggested table layout (one table, partition key `session_id`, TTL attribute `ex
 * Sign-out deletes immediately and is not gated.
 * A user who never completes the canvas, or never downloads both files, cannot delete manually:
   their session is removed by the 24-hour expiry ([expiry.md](expiry.md)).
-* Not run against real DynamoDB or on more than one server. The in-memory stores are per process.
+* **Not run against real DynamoDB.** The DynamoDB stores are tested against `moto`, which implements
+  transactions and conditions faithfully but is not AWS. Run [the canary scan](deployment.md) once
+  against the real table.
+* The interview draft is saved as one item with last-write-wins, as in memory. Confirming and a
+  reply finishing at the same instant could overwrite each other; confirming is only allowed once
+  the reply has finished, so this needs two tabs acting within milliseconds.
+* The cached appendix overview and the per-session email count are per task (not shared), so with
+  several tasks an overview may be written twice and the 5-email cap is per task.

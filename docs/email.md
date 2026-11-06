@@ -81,12 +81,14 @@ A bad value stops startup with an error that names the setting but not its value
    domain with DKIM). SES refuses to send from anything else.
 2. A new SES account is in the **sandbox**: it can send only to verified addresses and at a low
    rate. Verify the recipients you are testing with, or request production access before real use.
-3. Give the task role permission to send, scoped to the identity and the sender address:
+3. Give the task role permission to send, scoped to the identity and the sender address. Both
+   actions are needed: the app sends a raw message so the PDFs can be attached, and SES
+   authorises that as `ses:SendRawEmail` (leaving it out gives `AccessDeniedException`):
 
    ```json
    {
      "Effect": "Allow",
-     "Action": "ses:SendEmail",
+     "Action": ["ses:SendEmail", "ses:SendRawEmail"],
      "Resource": "arn:aws:ses:<region>:<account>:identity/<sender-or-domain>",
      "Condition": { "StringEquals": { "ses:FromAddress": "<EMAIL_SENDER_ADDRESS>" } }
    }

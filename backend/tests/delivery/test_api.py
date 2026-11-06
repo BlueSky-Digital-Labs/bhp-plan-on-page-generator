@@ -1,4 +1,8 @@
-"""Download status and deletion through the real app: the server's gate decides everything."""
+"""Download status and deletion through the real app: the server's gate decides everything.
+
+Every test runs twice: on the in-memory stores and on DynamoDB (moto), so the deployed storage is held
+to exactly the same behaviour.
+"""
 
 import logging
 import uuid
@@ -12,6 +16,8 @@ from tests.appendix.test_appendix_api import appendix, finish, finish_confirmed
 from tests.appendix.test_canvas_pptx import canvas_file
 from tests.interview.conftest import browser
 from tests.interview.test_interview_api import history, say, wire
+
+pytestmark = pytest.mark.usefixtures("store_kind")
 
 
 def status(client):

@@ -13,6 +13,9 @@ from tests.appendix.test_canvas_pptx import canvas_file
 from tests.interview.conftest import OPENING, browser
 from tests.interview.test_interview_api import answer_for, history, say, submit, wire
 
+pytestmark = pytest.mark.usefixtures("store_kind")  # every test: in-memory, then DynamoDB (moto)
+
+
 DOCUMENTS = [
     ("canvas pdf", lambda c, r=None: canvas_file(c, "pdf", r)),
     ("canvas pptx", lambda c, r=None: canvas_file(c, "pptx", r)),
@@ -39,7 +42,10 @@ def test_confirming_records_the_revision_and_returns_the_refreshed_review(world)
     assert response.status_code == 200
     review = response.json()
     assert review["confirmed_revision"] == review["revision"] == data["revision"]
-    assert review["canvas"]["ready_for_review"] and review["canvas"]["fields"]["priority"] == "High"
+    assert (
+        review["canvas"]["ready_for_review"]
+        and review["canvas"]["fields"]["priority"] == "Must-have"
+    )
     assert history(client)["confirmed_revision"] == data["revision"]
 
 
@@ -99,11 +105,13 @@ def test_the_body_takes_only_a_revision_so_nothing_else_such_as_a_priority_can_b
     data = finish(client)
     extra = client.post(
         "/api/canvas/confirm",
-        json={"revision": data["revision"], "priority": "Strategic"},
+        json={"revision": data["revision"], "priority": "Exploratory"},
         headers=csrf(client),
     )
     assert extra.status_code == 422
-    assert history(client)["canvas"]["fields"]["priority"] == "High"  # still the user's own choice
+    assert (
+        history(client)["canvas"]["fields"]["priority"] == "Must-have"
+    )  # still the user's own choice
     assert history(client)["confirmed_revision"] is None
 
 

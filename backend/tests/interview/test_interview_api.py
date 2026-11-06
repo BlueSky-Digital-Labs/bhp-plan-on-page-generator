@@ -1,6 +1,8 @@
 import json
 import uuid
 
+import pytest
+
 from app.conversation.service import ConversationService
 from app.conversation.store import InMemoryConversationStore
 from app.interview.engine import ExtractionFailed, Interviewer, InterviewState
@@ -10,6 +12,8 @@ from app.interview.store import InMemoryInterviewStore
 from tests.access.conftest import SESSION_COOKIE, csrf
 from tests.conversation.conftest import events, submit
 from tests.interview.conftest import ANSWERS, OPENING, AnswerFiler, FakeExtractor, browser
+
+pytestmark = pytest.mark.usefixtures("store_kind")  # every test: in-memory, then DynamoDB (moto)
 
 
 def wire(world, extractor=None):
@@ -42,7 +46,7 @@ def say(client, text):
 
 def answer_for(reply: str) -> str:
     """Pick the synthetic answer for whatever the interviewer just asked."""
-    if "Why does this deserve" in reply:
+    if "Why did you give this idea the priority" in reply:
         return "skip"  # the follow-up on the chosen priority
     if "down as the" in reply:  # the dedicated data / systems confirmations
         return "Yes, that's all." if "as the data" in reply else "Also the safety system."
@@ -73,7 +77,7 @@ def test_a_rough_idea_is_guided_to_a_complete_canvas_through_the_real_endpoints(
         assert question.count("?") == 1, question  # one question per turn
 
     fields = data["canvas"]["fields"]
-    assert fields["solutionName"] == "Shift Notes Assistant" and fields["priority"] == "High"
+    assert fields["solutionName"] == "Shift Notes Assistant" and fields["priority"] == "Must-have"
     assert fields["opportunityTypes"] == ["Find Information", "Generate Reports"]
     assert fields["systems"].endswith("Also the safety system.")  # confirmation detail appended
     assert "businessImpact" not in fields  # declined, so not fabricated

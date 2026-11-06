@@ -77,7 +77,7 @@ def _paragraph(text: str, style: str = "Normal", *, muted: bool = False) -> str:
 
 def render_docx(appendix: AppendixInput) -> bytes:
     body = [
-        _paragraph("Plan on a Page: Appendix", "Title"),
+        _paragraph(f"{appendix.app_name}: Appendix", "Title"),
         _paragraph(INTRO, "Note"),
         _paragraph(
             f"Source revision {appendix.source_revision} · {appendix.included_turns} conversation turns",

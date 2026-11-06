@@ -261,7 +261,7 @@ class ConverseStreamAdapter:
         except Exception as exc:  # noqa: BLE001 - every SDK failure becomes a typed result
             turn.failure = failure_from_exception(exc, partial_output=turn.emitted)
         end = turn.end(tool_choice=request.tool_choice)
-        self._log(end, started)
+        self._log(end, started, kwargs)
         yield end
 
     def collect(self, request: ConverseRequest) -> TurnResult:
@@ -279,17 +279,36 @@ class ConverseStreamAdapter:
         result.text = "".join(parts)
         return result
 
-    def _log(self, end: StreamEnd, started: float) -> None:
-        # Metadata only. No messages, system text, completions, tool input or provider text.
-        logger.info(
-            "converse_stream_finished",
-            extra={
-                "model_id": self._config.config.model_id,
-                "stop_reason": end.stop_reason,
-                "failure_code": end.failure.code.value if end.failure else None,
-                "status": end.status.value,
-                "input_tokens": end.usage.input_tokens if end.usage else None,
-                "output_tokens": end.usage.output_tokens if end.usage else None,
-                "latency_ms": int((time.monotonic() - started) * 1000),
-            },
-        )
+    def _log(self, end: StreamEnd, started: float, kwargs: dict[str, Any]) -> None:
+        # Metadata only. No messages, system text, completions, tool input or provider text,
+        # except the opt-in, short error text (failures.py).
+        extra: dict[str, Any] = {
+            "model_id": self._config.config.model_id,
+            "stop_reason": end.stop_reason,
+            "failure_code": end.failure.code.value if end.failure else None,
+            "status": end.status.value,
+            "input_tokens": end.usage.input_tokens if end.usage else None,
+            "output_tokens": end.usage.output_tokens if end.usage else None,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+        }
+        if end.failure:
+            extra["exception_type"] = end.failure.exception_type
+            extra["http_status"] = end.failure.http_status
+            extra["request_id"] = end.failure.request_id
+            extra["request_shape"] = _request_shape(kwargs)
+            if end.failure.error_text:
+                extra["error_text"] = end.failure.error_text
+        logger.info("converse_stream_finished", extra=extra)
+
+
+def _request_shape(kwargs: dict[str, Any]) -> str:
+    """Which parts a request had and how many, never their content. Tool names are constants."""
+    tool_config = kwargs.get("toolConfig", {})
+    tools = ",".join(t["toolSpec"]["name"] for t in tool_config.get("tools", [])) or "none"
+    choice = next(iter(tool_config.get("toolChoice", {})), "none")
+    inference = ",".join(sorted(kwargs.get("inferenceConfig", {}))) or "none"
+    return (
+        f"messages={len(kwargs.get('messages', []))} system={len(kwargs.get('system', []))} "
+        f"tools={tools} tool_choice={choice} inference={inference} "
+        f"extra_fields={'yes' if 'additionalModelRequestFields' in kwargs else 'no'}"
+    )

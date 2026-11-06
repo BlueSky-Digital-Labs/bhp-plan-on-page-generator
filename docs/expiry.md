@@ -67,7 +67,7 @@ boundary, paging and the page limit, repeats and overlapping sweeps, one session
 rest are removed and then retried, the sign-in record ended before content is deleted, abandoned
 sessions with no download, and the command's exit codes.
 
-Once the durable stores exist, verify the schedule in AWS: run the task once by hand with the command
+Verify the schedule in AWS: run the task once by hand with the command
 override, check that CloudWatch shows `expiry_run` and the task exit code is 0, create a test session,
 wait until it is past 24 hours (or use a test environment with a shortened lifetime), and check that
 the next run reports it as deleted and its records are gone. Then force a failure (for example a
@@ -75,8 +75,9 @@ revoked permission) and confirm the alarm fires.
 
 ## Not done
 
-* **Not runnable against real storage.** Deployed, the command exits `1` with `expiry_unavailable`
-  because the conversation store has no durable version yet ([downloads.md](downloads.md)).
+* **Not run against real DynamoDB.** The sweep is tested against the DynamoDB stores on `moto`
+  (including a table scan after a sweep that finds nothing left, and a session whose sign-in record is
+  already gone); run it once against the real table ([deployment.md](deployment.md)).
 * **No infrastructure, schedule, role or alarm** here. Those need to be created in the infrastructure
   code; the list above is the specification.
 * **Sessions with no content** (signed in, never wrote anything) are removed by their own record's

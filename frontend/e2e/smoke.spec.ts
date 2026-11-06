@@ -106,7 +106,7 @@ test("user can complete the canvas and see all required fields satisfied", async
   ]) {
     await page.getByLabel(label).fill("x");
   }
-  await page.getByRole("radio", { name: "High" }).check();
+  await page.getByRole("radio", { name: "Must-have" }).check();
   await page.getByRole("checkbox", { name: "Analyse Data" }).check();
   await expect(page.getByTestId("canvas-progress")).toHaveText("All required fields are complete.");
 });
@@ -119,11 +119,11 @@ test.describe("access code", () => {
     await expect(page.getByLabel("Access code", { exact: true })).toHaveAttribute("type", "password");
   });
 
-  test("the entry page centres the access card, and the header says BHP", async ({ page }) => {
+  test("the entry page centres the access card, under the BHP logo", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/");
     await expect(page.getByLabel("Access code", { exact: true })).toBeVisible();
-    await expect(page.locator("header")).toHaveText("BHP");
+    await expect(page.locator("header").getByRole("img", { name: "BHP" })).toBeVisible();
 
     const block = (await page.locator(".entry").boundingBox())!;
     const main = (await page.locator("main").boundingBox())!;
@@ -446,7 +446,7 @@ test.describe("conversation", () => {
 
 test.describe("one-page canvas", () => {
   const FIELDS = {
-    solutionName: "Shift Notes Assistant", team: "Operations", priority: "High",
+    solutionName: "Shift Notes Assistant", team: "Operations", priority: "Must-have",
     opportunityTypes: ["Find Information", "Generate Reports"],
     currentProcess: "Copy notes between spreadsheets", painPoints: "Takes hours", businessImpact: "",
     futureState: "One shared summary", achieve: "Faster handover", success: "Handover takes minutes",
@@ -471,7 +471,7 @@ test.describe("one-page canvas", () => {
     for (const text of ["Shift Notes Assistant", "Operations", "Copy notes between spreadsheets", "Handover takes minutes", "Rostering system", "Hours saved per week"]) {
       await expect(sheet).toContainText(text);
     }
-    await expect(sheet.getByRole("listitem").filter({ hasText: "(selected)" })).toHaveCount(3); // High + 2 types
+    await expect(sheet.getByRole("listitem").filter({ hasText: "(selected)" })).toHaveCount(3); // Must-have + 2 types
     await expect(sheet).toContainText("Not provided"); // the skipped optional field is left blank
 
     // Colours come straight from the template image.
@@ -502,7 +502,7 @@ test.describe("one-page canvas", () => {
     });
     await page.goto("/review");
     await expect(page.getByRole("heading", { level: 2, name: "Check your canvas" })).toBeVisible();
-    await expect(page.getByText("the priority, High, which is the one you chose")).toBeVisible();
+    await expect(page.getByText("the priority, Must-have, which is the one you chose")).toBeVisible();
     await expect(page.getByRole("button", { name: /^Download/ })).toHaveCount(0); // nothing before confirming
 
     await page.getByRole("button", { name: "Yes, this is correct" }).click();
@@ -658,6 +658,18 @@ test.describe("one-page canvas", () => {
     await page.getByRole("button", { name: "Yes, delete everything" }).click();
     await expect(page).toHaveURL(/\/$/);
     await expect(page.getByRole("status")).toContainText("Your session was deleted");
+  });
+
+  test("branding: the header shows the BHP logo and the names the server is configured with", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("banner").getByRole("img", { name: "BHP" })).toBeVisible();
+    const logo = await page.getByRole("banner").getByRole("img", { name: "BHP" }).evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0);
+    expect(logo).toBe(true); // the logo file is really served
+    await expect(page.getByRole("banner")).toContainText("Plan on a Page"); // the default; set HEADER_TEXT to change it
+    await expect(page.getByRole("contentinfo")).toContainText("BHP");
+    await expect(page).toHaveTitle("Plan on a Page");
+    const names = await page.request.get("/api/branding").then((r) => r.json());
+    expect(Object.keys(names).sort()).toEqual(["app_name", "footer_text", "header_text"]);
   });
 
   test("prints to a single dark landscape page", async ({ page }) => {

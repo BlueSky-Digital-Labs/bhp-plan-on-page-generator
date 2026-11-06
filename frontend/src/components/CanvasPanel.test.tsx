@@ -49,14 +49,14 @@ describe("CanvasPanel", () => {
     render(
       <CanvasPanel
         canvas={view({
-          fields: { solutionName: "Shift Notes Assistant", opportunityTypes: ["Find Information", "Generate Reports"], priority: "High" },
+          fields: { solutionName: "Shift Notes Assistant", opportunityTypes: ["Find Information", "Generate Reports"], priority: "Must-have" },
           missing_required: Array(11).fill("x"),
         })}
       />,
     );
     expect(row("solutionName").getByText("Shift Notes Assistant")).toBeInTheDocument();
     expect(row("opportunityTypes").getByText("Find Information, Generate Reports")).toBeInTheDocument();
-    expect(row("priority").getByText("High")).toBeInTheDocument();
+    expect(row("priority").getByText("Must-have")).toBeInTheDocument();
     expect(screen.getByTestId("canvas-progress")).toHaveTextContent("11 required answers still to go.");
   });
 

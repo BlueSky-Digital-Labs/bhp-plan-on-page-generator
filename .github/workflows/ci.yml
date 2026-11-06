@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call: # deploy.yml runs these same checks before it deploys
 
 permissions:
   contents: read
@@ -12,8 +13,8 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
@@ -27,8 +28,8 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -42,17 +43,54 @@ jobs:
       - run: npm run build
         working-directory: frontend
 
+  infra:
+    name: infra (CDK tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: infra/uv.lock
+      - run: uv sync --frozen
+        working-directory: infra
+      - run: uv run --frozen ruff check . && uv run --frozen ruff format --check .
+        working-directory: infra
+      # The tests synthesise the test and prod stacks, so this is also the `cdk synth` check.
+      - run: uv run --frozen pytest -q
+        working-directory: infra
+
+  # Reported, not blocking: a new advisory against an unchanged dependency should not fail an
+  # unrelated change. The deploy workflow's image scan is the blocking gate.
+  dependency-audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: pip-audit (backend lockfile, runtime dependencies)
+        run: |
+          uv export --frozen --no-dev --no-emit-project --no-hashes -o "$RUNNER_TEMP/backend.txt"
+          uvx pip-audit --requirement "$RUNNER_TEMP/backend.txt" --no-deps --disable-pip
+        working-directory: backend
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: npm audit (frontend runtime dependencies)
+        run: npm audit --omit=dev --audit-level=high
+        working-directory: frontend
+
   browser-smoke:
     name: browser smoke (Chrome + Edge)
     runs-on: ubuntu-latest
     needs: [backend, frontend]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -65,7 +103,7 @@ jobs:
         working-directory: frontend
       - run: npx playwright test
         working-directory: frontend
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: playwright-report
@@ -75,7 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend, frontend]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: docker build -t plan-on-a-page .
       - name: Container starts healthy as non-root, and fails fast without APP_ENV
         run: |

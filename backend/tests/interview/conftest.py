@@ -92,7 +92,7 @@ ANSWERS = {
     "data": "Shift logs and incident records.",
     "systems": "The rostering system.",
     "risks": "Notes may contain sensitive details.",
-    "priority": "High",
+    "priority": "Must-have",
 }
 OPENING = "We copy shift notes between three spreadsheets and it takes hours."
 

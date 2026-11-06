@@ -30,7 +30,7 @@ def test_the_canvas_fields_match_the_frontend_definition():
         "Analyse Data",
         "Automate Workflows",
     )
-    assert PRIORITIES == ("Low", "Medium", "High", "Strategic")
+    assert PRIORITIES == ("Must-have", "Nice-to-have", "Exploratory")
 
 
 def test_business_impact_and_kpis_are_never_required():
@@ -55,9 +55,15 @@ def test_missing_priority_or_opportunity_type_always_blocks_readiness():
         ("team", 42, None),
         ("team", "x" * 1001, None),
         ("budget", "anything", None),  # not a canvas field
-        ("priority", "high", "High"),
+        ("priority", "must have", "Must-have"),
+        ("priority", "MUST-HAVE", "Must-have"),
+        ("priority", "nice to have", "Nice-to-have"),
+        ("priority", "Nice-to-have", "Nice-to-have"),
+        ("priority", "exploratory", "Exploratory"),
         ("priority", "Critical", None),  # not one of the four
-        ("priority", "Highest", None),
+        ("priority", "High", None),
+        ("priority", "Strategic", None),
+        ("priority", "Musthave", None),
         (
             "opportunityTypes",
             ["find information", "Analyse Data"],
@@ -143,6 +149,35 @@ def test_a_follow_up_shows_how_to_answer_with_an_example():
 
 
 def test_the_priority_follow_up_asks_why_in_one_question():
-    question = render_question("probe", "priority", {"priority": "High"}, attempts=0)
-    assert question == "Why does this deserve High priority?"
+    question = render_question("probe", "priority", {"priority": "Must-have"}, attempts=0)
+    assert question == "Why did you give this idea the priority “Must-have”?"
     assert validate_question(question, "priority")
+
+
+def test_every_field_has_a_specific_first_ask_and_a_how_to_answer_hint():
+    for field, (ask, clarify) in QUESTIONS.items():
+        assert field in TIPS and len(TIPS[field]) > 20, field  # a hint shown after the first ask
+        assert ask != clarify and len(ask.split()) >= 7, field  # specific, not a bare label
+
+
+def test_open_ended_asks_lead_with_concrete_things_to_think_about():
+    leads = {
+        "painPoints": "delays, mistakes",
+        "data": "logs, reports",
+        "systems": "rostering",
+        "risks": "approvals",
+        "businessImpact": "time saved, cost, safety",
+        "kpis": "hours saved",
+        "currentProcess": "first step to the last",
+    }
+    for field, words in leads.items():
+        assert words in QUESTIONS[field][0], field
+
+
+def test_the_priority_question_names_the_three_options_and_the_hint_explains_them():
+    ask, clarify = QUESTIONS["priority"]
+    for text in (ask, clarify):
+        assert "Must-have, Nice-to-have or Exploratory" in text
+        assert not any(old in text for old in ("Low", "Medium", "High", "Strategic"))
+    tip = TIPS["priority"]
+    assert all(word in tip for word in ("Must-have", "Nice-to-have", "Exploratory"))

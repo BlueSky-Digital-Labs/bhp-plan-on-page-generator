@@ -544,9 +544,7 @@ def render_canvas_pdf(fields: dict[str, Any]) -> bytes:
         pdf.set_xy(137, 15 + row * 5.6)
         pdf.cell(150, 5.4, label + (shorten(value, 60) if value else "-"), align="R")
     pdf.set_font("DejaVu", "", 8.5)
-    marks = "  ".join(
-        ("■ " if p == t["priority"] else "□ ") + p for p in ("Low", "Medium", "High", "Strategic")
-    )
+    marks = "  ".join(("■ " if p == t["priority"] else "□ ") + p for p in PRIORITIES)
     pdf.set_xy(137, 27)
     pdf.cell(150, 5, "Priority:  " + marks, align="R")
 

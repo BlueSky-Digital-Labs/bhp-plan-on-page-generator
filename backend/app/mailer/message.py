@@ -100,20 +100,21 @@ def compose(
     solution_name: str,
     note: str,
     attachments: tuple[Attachment, ...],
+    app_name: str = "Plan on a Page",
 ) -> OutgoingEmail:
     """The email for a confirmed canvas. The note is the sender's own and is clearly marked."""
     name = single_line(solution_name, _SUBJECT_NAME_CHARS)
-    subject = f"Plan on a Page: {name}" if name else "Plan on a Page"
+    subject = f"{app_name}: {name}" if name else app_name
     about = f" for “{name}”" if name else ""
     lines = [
-        f"A Plan on a Page canvas{about} is attached, with its appendix.",
+        f"The canvas{about} from {app_name} is attached, with its appendix.",
         "",
         *(f"  - {a.filename}" for a in attachments),
     ]
     note = _BODY_CONTROL.sub("", note.replace("\r\n", "\n").replace("\r", "\n")).strip()
     if note:
         lines += ["", "Message from the sender:", "", note]
-    lines += ["", "Sent from the Plan on a Page app."]
+    lines += ["", f"Sent from {app_name}."]
     return OutgoingEmail(recipients, subject, "\n".join(lines) + "\n", attachments)
 
 

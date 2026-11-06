@@ -1,9 +1,10 @@
 """Where the access-code hash and cookie-signing key come from.
 
-Deployed: AWS Secrets Manager through the workload role. The access-code hash is fetched
-on EVERY verification and never cached, so rotating the secret takes effect on the next
-attempt without a restart. The signing key is cached briefly (it is not what June rotates).
-Any lookup problem raises DependencyUnavailable: the caller fails closed.
+Deployed: AWS Secrets Manager, or (SECRETS_BACKEND=parameterstore, for an account whose policies do
+not allow Secrets Manager) Systems Manager Parameter Store SecureString, through the workload role.
+The access-code hash is fetched on EVERY verification and never cached, so rotating it takes effect
+on the next attempt without a restart. The signing key is cached briefly (it is not what June
+rotates). Any lookup problem raises DependencyUnavailable: the caller fails closed.
 """
 
 import threading
@@ -33,7 +34,9 @@ def _checked_key(value: str | None) -> bytes:
     return key
 
 
-class SecretsManagerProvider:
+class _StoredSecrets:
+    """The caching and checking every backend shares; a subclass says how one value is read."""
+
     def __init__(
         self,
         client: Any,
@@ -51,9 +54,12 @@ class SecretsManagerProvider:
         self._key: tuple[bytes, float] | None = None
         self._key_lock = threading.Lock()  # requests run on a thread pool
 
-    def _fetch(self, secret_id: str) -> str:
+    def _read(self, name: str) -> str:
+        raise NotImplementedError
+
+    def _fetch(self, name: str) -> str:
         try:
-            return self._client.get_secret_value(SecretId=secret_id)["SecretString"]
+            return self._read(name)
         except (ClientError, BotoCoreError, KeyError):
             raise DependencyUnavailable("secret_lookup") from None
 
@@ -73,6 +79,18 @@ class SecretsManagerProvider:
                     now + KEY_CACHE_SECONDS,
                 )
             return cached[0]
+
+
+class SecretsManagerProvider(_StoredSecrets):
+    def _read(self, name: str) -> str:
+        return self._client.get_secret_value(SecretId=name)["SecretString"]
+
+
+class ParameterStoreProvider(_StoredSecrets):
+    """The same two values as SecureString parameters, e.g. /plan-test/access-code-hash."""
+
+    def _read(self, name: str) -> str:
+        return self._client.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
 
 
 class EnvSecretProvider:
