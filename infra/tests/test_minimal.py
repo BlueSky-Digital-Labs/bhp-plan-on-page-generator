@@ -12,6 +12,7 @@ from config import Config, ConfigError
 from tests.conftest import (
     BASE,
     BEDROCK_ARNS,
+    BEDROCK_ROLE,
     MINIMAL,
     as_list,
     j,
@@ -306,6 +307,36 @@ def test_web_role_bedrock_is_stream_only_on_the_given_arns():
         "interviewer_bedrock"
     )
     assert not any(a.startswith("bedrock:") for a in role_actions(s.service, ROLES[1]))
+
+
+def test_a_bedrock_role_is_assumed_and_the_web_role_has_no_bedrock_actions_of_its_own():
+    s = minimal(bedrock_model_id="au.example-model-v1:0", bedrock_role_arn=BEDROCK_ROLE)
+    by_sid = {x["Sid"]: x for x in role_statements(s.service, "plan-test-web-task")}
+    assert as_list(by_sid["AssumeBedrockRole"]["Action"]) == ["sts:AssumeRole"]
+    assert as_list(by_sid["AssumeBedrockRole"]["Resource"]) == [BEDROCK_ROLE]
+    assert "InvokeApprovedModel" not in by_sid
+    assert not any(a.startswith("bedrock:") for a in role_actions(s.service, ROLES[0]))
+    assert not any(a.startswith("sts:") for a in role_actions(s.service, ROLES[1]))
+    web_env = env_of(container(s.service, "plan-test-web")[1])
+    assert web_env["AWS_CONFIG_FILE"] == "/app/aws-config"
+    assert web_env["BEDROCK_PROFILE"] == "rnd-bedrock"
+    assert web_env["CONVERSATION_PRODUCER"] == "interviewer_bedrock"
+    sweeper_env = env_of(container(s.service, "plan-test-sweeper")[1])
+    assert "BEDROCK_PROFILE" not in sweeper_env and "AWS_CONFIG_FILE" not in sweeper_env
+
+
+def test_the_role_must_match_the_one_baked_into_the_image():
+    other = "arn:aws:iam::667736131634:role/someone-else"
+    with pytest.raises(ValueError, match="aws-config"):
+        minimal(bedrock_model_id="au.example-model-v1:0", bedrock_role_arn=other)
+
+
+def test_the_task_role_name_is_the_one_the_other_account_trusts(m):
+    assert ROLES[0] == "plan-test-web-task"
+    assert any(
+        r["Properties"].get("RoleName") == "plan-test-web-task"
+        for r in resources(m.service, "AWS::IAM::Role").values()
+    )
 
 
 def test_without_a_model_there_is_no_bedrock_access(m):

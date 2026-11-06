@@ -49,6 +49,12 @@ bedrock_model_id          service        none                     Approved model
                                                                   and no Bedrock permissions.
 bedrock_resource_arns     service        none                     Comma-separated ARNs the web role
                                                                   may invoke. Needed with the id.
+bedrock_role_arn          service        none                     Role in another account the web
+                                                                  role assumes to call Bedrock
+                                                                  (minimal profile only). The web
+                                                                  role then has no Bedrock actions,
+                                                                  so no resource ARNs are needed.
+                                                                  Must match backend/aws-config.
 bedrock_region            service        region                   Must equal region.
 app_name                  service        Plan on a Page           On-screen name, 1 to 80 chars.
 header_text               service        Plan on a Page           Text beside the logo.
@@ -94,6 +100,7 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f  ]")
 _VPC_ID = re.compile(r"^vpc-[0-9a-f]{8,17}$")
 _SUBNET_ID = re.compile(r"^subnet-[0-9a-f]{8,17}$")
 _ACM_ARN = re.compile(r"^arn:aws[a-z-]*:acm:(?P<region>[a-z0-9-]+):\d{12}:certificate/[\w-]+$")
+_IAM_ROLE_ARN = re.compile(r"^arn:aws[a-z-]*:iam::\d{12}:role/[\w+=,.@/-]+$")
 _EMAIL = re.compile(r"^[^@\s,]+@[^@\s,]+\.[^@\s,]+$")
 
 
@@ -173,6 +180,7 @@ class Config:
     web_desired_count: int
     bedrock_model_id: str | None
     bedrock_resource_arns: tuple[str, ...]
+    bedrock_role_arn: str | None
     bedrock_region: str
     app_name: str
     header_text: str
@@ -283,7 +291,16 @@ class Config:
 
         model_id = _text(get, "bedrock_model_id")
         bedrock_arns = _list(get, "bedrock_resource_arns")
-        if model_id and not bedrock_arns:
+        bedrock_role_arn = _text(get, "bedrock_role_arn")
+        if bedrock_role_arn:
+            if not _IAM_ROLE_ARN.match(bedrock_role_arn):
+                raise ConfigError("context 'bedrock_role_arn' must be an IAM role ARN")
+            if not model_id:
+                raise ConfigError("context 'bedrock_role_arn' needs 'bedrock_model_id'")
+            if profile != "minimal":
+                # Assuming the role calls STS, and the full profile has no route to it.
+                raise ConfigError("context 'bedrock_role_arn' is for the minimal profile only")
+        elif model_id and not bedrock_arns:
             raise ConfigError("context 'bedrock_resource_arns' is required with 'bedrock_model_id'")
         if any(not a.startswith("arn:") for a in bedrock_arns):
             raise ConfigError("context 'bedrock_resource_arns' must be a list of ARNs")
@@ -336,6 +353,7 @@ class Config:
             ),
             bedrock_model_id=model_id,
             bedrock_resource_arns=bedrock_arns,
+            bedrock_role_arn=bedrock_role_arn,
             bedrock_region=bedrock_region,
             app_name=_branding(get, "app_name", "Plan on a Page"),
             header_text=_branding(get, "header_text", "Plan on a Page"),

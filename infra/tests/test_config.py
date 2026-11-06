@@ -5,7 +5,7 @@ import pytest
 
 import config
 from config import Config, ConfigError, OidcConfig
-from tests.conftest import BASE, BEDROCK_ARNS, CERT
+from tests.conftest import BASE, BEDROCK_ARNS, BEDROCK_ROLE, CERT
 
 
 def load(**overrides) -> Config:
@@ -41,6 +41,12 @@ def test_model_selects_the_bedrock_producer():
     assert len(cfg.bedrock_resource_arns) == 3
 
 
+def test_a_bedrock_role_replaces_the_resource_arns():
+    cfg = load(profile="minimal", bedrock_model_id="m", bedrock_role_arn=BEDROCK_ROLE)
+    assert cfg.bedrock_role_arn == BEDROCK_ROLE and cfg.bedrock_resource_arns == ()
+    assert cfg.conversation_producer == "interviewer_bedrock"
+
+
 @pytest.mark.parametrize(
     ("overrides", "needle"),
     [
@@ -56,6 +62,10 @@ def test_model_selects_the_bedrock_producer():
             {"bedrock_model_id": "m", "bedrock_resource_arns": BEDROCK_ARNS, "bedrock_region": "x"},
             "bedrock_region",
         ),
+        ({"bedrock_role_arn": "nope", "bedrock_model_id": "m"}, "IAM role ARN"),
+        ({"bedrock_role_arn": BEDROCK_ROLE}, "bedrock_model_id"),
+        # full profile (BASE): the tasks have no route to STS
+        ({"bedrock_role_arn": BEDROCK_ROLE, "bedrock_model_id": "m"}, "minimal profile"),
         ({"env": "prod"}, "alarm_email"),
         ({"alarm_email": "nope"}, "alarm_email"),
         ({"enable_email": "true"}, "ses_identity_arn"),

@@ -30,6 +30,7 @@ add hosted_zone_id HOSTED_ZONE_ID
 add image_tag IMAGE_TAG
 add bedrock_model_id BEDROCK_MODEL_ID
 add bedrock_resource_arns BEDROCK_RESOURCE_ARNS
+add bedrock_role_arn BEDROCK_ROLE_ARN
 add bedrock_region BEDROCK_REGION
 add alarm_email ALARM_EMAIL
 add monthly_budget_usd MONTHLY_BUDGET_USD

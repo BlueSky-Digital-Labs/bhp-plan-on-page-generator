@@ -14,6 +14,8 @@ BEDROCK_ARNS = (
     "arn:aws:bedrock:ap-southeast-2::foundation-model/example.model-v1:0,"
     "arn:aws:bedrock:ap-southeast-4::foundation-model/example.model-v1:0"
 )
+# Must equal role_arn in backend/aws-config: the stack refuses to synthesise otherwise.
+BEDROCK_ROLE = "arn:aws:iam::667736131634:role/bhp-plan-test-bedrock"
 # The existing tests describe the full design. env=test defaults to minimal, so say "full".
 BASE = {
     "env": "test",

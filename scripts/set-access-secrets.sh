@@ -66,9 +66,16 @@ if not overwrite:  # AWS rejects tags together with an overwrite
     request["Tags"] = [{"Key": k, "Value": v} for k, v in tags.items()]
 print(json.dumps(request))'
 }
-put_parameter() { # JSON from parameter_json on stdin
-  aws ssm put-parameter --region "$region" --cli-input-json file:///dev/stdin \
-    --query Version --output text > /dev/null
+# Sends the request from parameter_json (on stdin) with the AWS library for Python, which the backend
+# already depends on: the AWS CLI cannot read --cli-input-json from a pipe, and passing the value as an
+# argument would show it in the process list. The value stays in memory. Credentials come from the
+# same place as the CLI (AWS_PROFILE and your SSO login).
+put_parameter() {
+  REGION=$region uv run --quiet --frozen --no-dev --project "$root/backend" python -c '
+import json, os, sys
+import boto3
+request = json.load(sys.stdin)
+boto3.client("ssm", region_name=os.environ["REGION"]).put_parameter(**request)'
 }
 parameter_exists() { # 0 if it exists, 1 if it does not; anything else is an error and stops the script
   local err

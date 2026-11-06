@@ -7,6 +7,9 @@ shared account only: public subnets, tasks with public IPs, no endpoints, WAF, a
 (unless alarm_email is set) alarms. Same roles and actions, minus KMS.
 """
 
+from configparser import ConfigParser
+from pathlib import Path
+
 from aws_cdk import Annotations, CfnOutput, Duration, Stack
 from aws_cdk import aws_budgets as budgets
 from aws_cdk import aws_cloudwatch as cloudwatch
@@ -48,6 +51,11 @@ SWEEPER_ACTIONS_DDB = [
 KMS_ACTIONS = ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
 # Streaming only: ConverseStream is all the app calls (docs/bedrock.md forbids plain InvokeModel).
 BEDROCK_ACTIONS = ["bedrock:InvokeModelWithResponseStream"]
+# With bedrock_role_arn the web role calls Bedrock as a role in another account, through this
+# profile in the config file baked into the image (backend/aws-config).
+BEDROCK_PROFILE = "rnd-bedrock"
+AWS_CONFIG_FILE = "/app/aws-config"
+BEDROCK_PROFILE_FILE = Path(__file__).resolve().parents[2] / "backend" / "aws-config"
 FIVE_MINUTES = 300
 
 
@@ -66,6 +74,8 @@ class ServiceStack(Stack):
         self.foundation = foundation
         self.prefix = config.prefix
         image_tag = config.require_image_tag()  # fail at synth, before anything is deployed
+        if config.bedrock_role_arn:
+            self._check_bedrock_profile(config.bedrock_role_arn)
         if config.enable_email and not config.minimal:
             Annotations.of(self).add_warning(
                 "enable_email=true, but the tasks have no route to the SES API (private isolated "
@@ -258,7 +268,15 @@ class ServiceStack(Stack):
                     resources=[f.access_code_secret.secret_arn, f.cookie_key_secret.secret_arn],
                 )
             )
-        if cfg.bedrock_model_id:
+        if cfg.bedrock_role_arn:
+            self.web_role.add_to_policy(
+                iam.PolicyStatement(
+                    sid="AssumeBedrockRole",
+                    actions=["sts:AssumeRole"],
+                    resources=[cfg.bedrock_role_arn],
+                )
+            )
+        elif cfg.bedrock_model_id:
             self.web_role.add_to_policy(
                 iam.PolicyStatement(
                     sid="InvokeApprovedModel",
@@ -306,6 +324,18 @@ class ServiceStack(Stack):
             env["SECRETS_BACKEND"] = "parameterstore"  # Secrets Manager is the app's default
         return env
 
+    @staticmethod
+    def _check_bedrock_profile(role_arn: str) -> None:
+        """The image's profile and the permission to assume must name the same role."""
+        parser = ConfigParser()
+        parser.read(BEDROCK_PROFILE_FILE)
+        baked = parser.get(f"profile {BEDROCK_PROFILE}", "role_arn", fallback=None)
+        if baked != role_arn:
+            raise ValueError(
+                f"bedrock_role_arn does not match role_arn in {BEDROCK_PROFILE_FILE.name} "
+                f"({baked}); change both, then rebuild the image"
+            )
+
     def _web_env(self) -> dict[str, str]:
         cfg = self.config
         env = {
@@ -320,6 +350,9 @@ class ServiceStack(Stack):
             env["BEDROCK_REGION"] = cfg.bedrock_region
             env["BEDROCK_MODEL_ID"] = cfg.bedrock_model_id
             env["BEDROCK_MAX_TOKENS"] = "1024"
+        if cfg.bedrock_role_arn:
+            env["AWS_CONFIG_FILE"] = AWS_CONFIG_FILE
+            env["BEDROCK_PROFILE"] = BEDROCK_PROFILE
         if cfg.enable_email:
             env["EMAIL_SENDER_ADDRESS"] = cfg.email_sender_address or ""
             env["EMAIL_ALLOWED_DOMAINS"] = ",".join(cfg.email_allowed_domains)

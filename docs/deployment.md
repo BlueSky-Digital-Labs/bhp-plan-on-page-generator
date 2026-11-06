@@ -336,6 +336,17 @@ SNS, CloudWatch alarm, Budgets, autoscaling and Route 53 permissions are **full-
      `arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-sonnet-5-5`,
      `arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.claude-sonnet-5-5` and
      `arn:aws:bedrock:ap-southeast-2::foundation-model/openai.gpt-oss-120b-1:0`.
+   * **Calling Bedrock through a role in another account** (when the deployment account itself is
+     closed to the model): set `BEDROCK_ROLE_ARN` to that role, for example
+     `arn:aws:iam::667736131634:role/bhp-plan-test-bedrock`, with `BEDROCK_MODEL_ID` as before.
+     The web role (`plan-test-web-task`, the only name that role trusts) then gets
+     `sts:AssumeRole` on that one ARN and **no Bedrock actions of its own**, so
+     `BEDROCK_RESOURCE_ARNS` is not used. The container gets `AWS_CONFIG_FILE=/app/aws-config` and
+     `BEDROCK_PROFILE=rnd-bedrock`; the profile is in `backend/aws-config`, baked into the image,
+     and only the Bedrock client uses it. The ARN in that file and `BEDROCK_ROLE_ARN` must be the
+     same: synthesis fails if they differ, so change both and redeploy (the image is rebuilt).
+     Minimal profile only, because the full profile has no route to STS. Prompts and replies
+     cross into the other account, which is a privacy decision for whoever approves the model.
 5. **Deploy the GitHub trust stack once** (administrator, by hand):
    ```bash
    cd infra && npx aws-cdk@2.1147.0 deploy plan-github-oidc
@@ -590,13 +601,15 @@ None of the following has been run. Treat each as a likely first-deploy surprise
   would answer `503` until `set-access-secrets.sh` is run again. Avoid editing that secret's
   definition without checking.
 * `scripts/set-access-secrets.sh` against real Secrets Manager (tested with a stand-in `aws`:
-  the hash is valid Argon2 and verifies, and the code appears nowhere in what `aws` receives). `file:///dev/stdin` is assumed to work with your AWS CLI.
+  the hash is valid Argon2 and verifies, and the code appears nowhere in what `aws` receives). `file:///dev/stdin` as the value of `--secret-string` is assumed to work with your AWS CLI (the equivalent for
+  `--cli-input-json` did NOT: see the next item).
 * The destroy workflow end to end, including the leftover Lambda log group removal and the
   tag-based check (the tagging API can lag; the script retries).
-* **Parameter Store backend** (the app side is being written separately): `ssm put-parameter
-  --cli-input-json file:///dev/stdin` reading a pipe (tested only against a stand-in `aws`, which
-  confirmed the JSON, the `Overwrite` flags, the key id and that the value is not in the
-  arguments); that the account's SCPs allow `ssm:PutParameter` with `--type SecureString` under
+* **Parameter Store backend.** `ssm put-parameter --cli-input-json file:///dev/stdin` does not work with a real
+  AWS CLI (first real run: "Invalid JSON received"), so the script now sends the request with the AWS
+  library for Python (boto3, from the backend's own environment): tested against a simulated Parameter Store
+  for the create with tags, the overwrite and the stored value, not yet against AWS with SSO credentials. Also
+  unverified: that the account's SCPs allow `ssm:PutParameter` with `--type SecureString` under
   `alias/aws/ssm` as the probe suggests, and `ssm:GetParameter` from the task role; that the app
   reads the parameter names the stacks pass; the `ssm` interface endpoint's private DNS in the full
   profile; that the Destroy workflow's `ssm:DeleteParameters` is enough and that the leftover check

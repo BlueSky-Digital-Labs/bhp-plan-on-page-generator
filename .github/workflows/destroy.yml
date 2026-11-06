@@ -52,6 +52,7 @@ jobs:
       HOSTED_ZONE_ID: ${{ vars.HOSTED_ZONE_ID }}
       BEDROCK_MODEL_ID: ${{ vars.BEDROCK_MODEL_ID }}
       BEDROCK_RESOURCE_ARNS: ${{ vars.BEDROCK_RESOURCE_ARNS }}
+      BEDROCK_ROLE_ARN: ${{ vars.BEDROCK_ROLE_ARN }}
       ALARM_EMAIL: ${{ vars.ALARM_EMAIL }}
       ENABLE_EMAIL: ${{ vars.ENABLE_EMAIL }}
       SES_IDENTITY_ARN: ${{ vars.SES_IDENTITY_ARN }}
