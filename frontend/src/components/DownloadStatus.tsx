@@ -8,12 +8,12 @@ const FOLLOW_UPS_MS = [1500, 4000];
 
 // Fixed copy keyed on the lock reason: nothing from the response is shown.
 const OUTSTANDING: Record<string, string> = {
-  both_not_downloaded: "the one-page canvas (PDF) and the appendix (PDF)",
-  canvas_not_downloaded: "the one-page canvas (PDF)",
-  appendix_not_downloaded: "the appendix (PDF)",
+  both_not_downloaded: "the one-page canvas and the appendix",
+  canvas_not_downloaded: "the one-page canvas",
+  appendix_not_downloaded: "the appendix",
 };
 const PURGE_MESSAGES: Record<string, string> = {
-  purge_locked: "Deleting is still locked. Please download both PDFs first.",
+  purge_locked: "Deleting is still locked. Please download both documents first.",
   revision_conflict: "The canvas changed since it was shown. Please read it again before deleting.",
 };
 const FAILED = "That could not be done. Please try again.";
@@ -23,7 +23,7 @@ type State =
   | { phase: "ready"; status: Status }
   | { phase: "failed" };
 
-// Shows, for the current revision, whether the server has finished sending each PDF, why deleting
+// Shows, for the current revision, whether the server has finished sending each document, why deleting
 // is locked, and the delete action only when the server says both are done. "Downloaded" means the
 // server sent the whole file: it cannot know whether the browser kept it or the user saved it.
 export function DownloadStatus({
@@ -127,8 +127,8 @@ export function DownloadStatus({
     <section className="dl card" aria-labelledby="dl-heading">
       <h2 id="dl-heading">Your documents</h2>
       <ul className="dl__list">
-        {row("One-page canvas (PDF)", state.phase === "failed" ? null : known?.canvas_downloaded)}
-        {row("Appendix (PDF)", state.phase === "failed" ? null : known?.appendix_downloaded)}
+        {row("One-page canvas", state.phase === "failed" ? null : known?.canvas_downloaded)}
+        {row("Appendix", state.phase === "failed" ? null : known?.appendix_downloaded)}
       </ul>
 
       {state.phase === "failed" && (
@@ -141,17 +141,17 @@ export function DownloadStatus({
           <strong>Deleting is locked.</strong>{" "}
           {OUTSTANDING[status.lock_reason ?? ""]
             ? `Still to download: ${OUTSTANDING[status.lock_reason ?? ""]}.`
-            : "The current canvas must be confirmed and both PDFs downloaded first."}
+            : "The current canvas must be confirmed and both documents downloaded first."}
         </p>
       )}
       {status?.purge_eligible && (
         <p role="status" className="readback__done">
-          Both PDFs have been downloaded. You can delete this session when you are ready.
+          Both documents have been downloaded. You can delete this session when you are ready.
         </p>
       )}
 
       <p className="dl__help">
-        Save both PDFs somewhere you can find them before you delete anything. &ldquo;Downloaded&rdquo; means this app
+        Save both documents somewhere you can find them before you delete anything. &ldquo;Downloaded&rdquo; means this app
         finished sending the file to your browser. It cannot check that the file was saved on your device, and nothing is
         submitted to a backlog. If a download is slow, the status may take a moment: choose Refresh status, which does not
         download the file again.

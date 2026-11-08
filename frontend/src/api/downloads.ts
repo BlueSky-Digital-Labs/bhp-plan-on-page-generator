@@ -9,7 +9,7 @@ export interface DownloadStatus {
   lock_reason: string | null;
 }
 
-// Which of the two PDFs the server has finished sending for the current revision.
+// Which of the two documents the server has finished sending (in any format) for the current revision.
 export function getDownloadStatus(signal?: AbortSignal): Promise<DownloadStatus> {
   return apiRequest<DownloadStatus>("/api/downloads", { signal });
 }

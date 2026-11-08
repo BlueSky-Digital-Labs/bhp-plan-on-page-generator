@@ -15,8 +15,6 @@ from app.errors import ApiProblem
 
 logger = logging.getLogger("app.downloads")
 CHUNK_BYTES = 64 * 1024
-# Only the PDF of each document counts towards the deletion gate (the ticket's "both PDFs").
-COUNTED_FORMAT = "pdf"
 
 # Document downloads: why a request was refused. Fixed, content-free wording.
 DOWNLOAD_FAILURES = {
@@ -87,11 +85,9 @@ def delivery_recorder(
     session: Session,
     kind: DocumentKind,
     snapshot: ExportSnapshot,
-    file_format: str,
-) -> Callable[[], None] | None:
-    """What to do once a file has been fully sent, if this format counts towards the gate."""
-    if file_format != COUNTED_FORMAT:
-        return None
+) -> Callable[[], None]:
+    """What to do once a file has been fully sent. A document counts towards the deletion gate in
+    whatever format it was downloaded (PDF, PowerPoint, Word or JSON); the email does not."""
     return lambda: service.record_delivery(session, kind, snapshot.revision)
 
 

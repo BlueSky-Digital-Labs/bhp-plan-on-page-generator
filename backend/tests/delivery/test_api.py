@@ -82,16 +82,23 @@ def test_status_is_never_cached_and_needs_a_session(world):
     assert status(client).status_code in (401, 403)
 
 
-def test_only_the_pdf_of_each_document_counts(world):
+def test_any_format_of_a_document_counts(world):
     client = ready_client(world)
-    for response in (
-        canvas_file(client, "pptx"),
-        appendix(client, "docx"),
-        appendix(client, "json"),
-    ):
-        assert response.status_code == 200
+    assert canvas_file(client, "pptx").status_code == 200
     got = status(client).json()
-    assert not got["canvas_downloaded"] and not got["appendix_downloaded"]
+    assert got["canvas_downloaded"] and not got["appendix_downloaded"]
+    assert got["lock_reason"] == "appendix_not_downloaded" and not got["purge_eligible"]
+    assert appendix(client, "docx").status_code == 200
+    got = status(client).json()
+    assert got["canvas_downloaded"] and got["appendix_downloaded"]
+    assert got["purge_eligible"] and got["lock_reason"] is None
+
+
+def test_the_json_appendix_also_counts_for_the_appendix(world):
+    client = ready_client(world)
+    assert canvas_file(client, "pdf").status_code == 200
+    assert appendix(client, "json").status_code == 200
+    assert status(client).json()["purge_eligible"]
 
 
 def test_asking_for_a_file_without_receiving_it_records_nothing(world):

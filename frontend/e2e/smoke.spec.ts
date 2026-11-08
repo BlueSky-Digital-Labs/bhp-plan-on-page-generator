@@ -590,17 +590,17 @@ test.describe("one-page canvas", () => {
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
     const card = page.locator(".dl");
     const cases: Array<[boolean, boolean, string, string, string]> = [
-      [false, false, "Not downloaded yet", "Not downloaded yet", "the one-page canvas (PDF) and the appendix (PDF)"],
-      [true, false, "Downloaded", "Not downloaded yet", "the appendix (PDF)"],
-      [false, true, "Not downloaded yet", "Downloaded", "the one-page canvas (PDF)"],
+      [false, false, "Not downloaded yet", "Not downloaded yet", "the one-page canvas and the appendix"],
+      [true, false, "Downloaded", "Not downloaded yet", "the appendix"],
+      [false, true, "Not downloaded yet", "Downloaded", "the one-page canvas"],
     ];
     for (const [canvas, appendix, canvasText, appendixText, outstanding] of cases) {
       await page.unroute("**/api/downloads");
       await mockDownloads(page, canvas, appendix);
       await page.goto("/review");
       await expect(card.getByRole("heading", { name: "Your documents" })).toBeVisible();
-      await expect(card.locator("li", { hasText: "One-page canvas (PDF)" })).toContainText(canvasText);
-      await expect(card.locator("li", { hasText: "Appendix (PDF)" })).toContainText(appendixText);
+      await expect(card.locator("li", { hasText: "One-page canvas" })).toContainText(canvasText);
+      await expect(card.locator("li", { hasText: "Appendix" })).toContainText(appendixText);
       await expect(card).toContainText(`Still to download: ${outstanding}.`);
       await expect(page.getByRole("button", { name: /^Delete my session/ })).toHaveCount(0);
     }
@@ -639,7 +639,7 @@ test.describe("one-page canvas", () => {
     await page.request.get("/api/session").then((r) => expect(r.status()).toBe(200)); // still signed in: nothing was touched
   });
 
-  test("deleting: after both PDFs, the user confirms and returns to entry with a plain notice", async ({ page }) => {
+  test("deleting: after both documents, the user confirms and returns to entry with a plain notice", async ({ page }) => {
     await signInAndWait(page);
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
     await mockDownloads(page, true, true);

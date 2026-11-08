@@ -37,7 +37,7 @@ def download_appendix(
     content = appendix_bytes(service, session, snapshot, file_format, settings.app_name)
     ensure_still_confirmed(service, session, revision)
     logger.info("appendix_downloaded", extra={"reason": file_format})
-    recorder = delivery_recorder(service, session, "appendix", snapshot, file_format)
+    recorder = delivery_recorder(service, session, "appendix", snapshot)
     return attachment(
         content, MEDIA_TYPES[file_format], snapshot, "appendix", file_format, recorder
     )

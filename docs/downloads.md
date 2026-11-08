@@ -1,8 +1,9 @@
 # Download status and deleting a session
 
-Users save their own PDFs outside the app; downloading does **not** submit anything to a backlog.
-The server records when it has finished sending each of the two PDFs, shows that status, and lets
-the user delete their session only after both PDFs of the **current** version have been sent.
+Users save their own documents outside the app; downloading does **not** submit anything to a backlog.
+The server records when it has finished sending each of the two documents (the one-page canvas and the
+appendix, in any format), shows that status, and lets the user delete their session only after both
+have been sent for the **current** version.
 
 Code: `backend/app/delivery/` (records and the gate), `backend/app/api/downloads.py` (status),
 `backend/app/api/access.py` (`POST /api/session/purge`), `backend/app/conversation/service.py`
@@ -10,13 +11,14 @@ Code: `backend/app/delivery/` (records and the gate), `backend/app/api/downloads
 
 ## What "downloaded" means
 
-The canvas PDF and the appendix PDF are sent as a streamed response. The server notes "delivered"
+Each document is sent as a streamed response. The server notes "delivered"
 only **after the last chunk has been handed over**. It does not note it on arrival of the request,
 when headers go out, if the connection drops or is cancelled, or if building the file failed.
 
 That is the only fact recorded. It does **not** prove the browser kept the file or that the user
-saved it, and the screen says so. Only the PDF of each document counts (`COUNTED_FORMAT` in
-`app/api/exports.py`); the PowerPoint, Word and JSON files and the email do not.
+saved it, and the screen says so. A document counts in whatever format it was sent: the canvas as PDF or PowerPoint, the appendix as PDF,
+Word or JSON (`delivery_recorder` in `app/api/exports.py`). One format of each is enough. The email does
+not count.
 
 ## The gate
 
@@ -54,9 +56,9 @@ download check. Whether sign-out should keep doing that is a product decision (s
 
 ## On screen
 
-On the review page, once the canvas is confirmed, a **Your documents** card shows each PDF as
+On the review page, once the canvas is confirmed, a **Your documents** card shows each document as
 "Downloaded" or "Not downloaded yet" (words and symbols, not colour alone), a locked explanation
-that names what is outstanding, guidance to save both PDFs, and a **Refresh status** button. The
+that names what is outstanding, guidance to save both documents, and a **Refresh status** button. The
 **Delete my session** button appears only when the server says both are done, and asks for one more
 confirmation. The page:
 

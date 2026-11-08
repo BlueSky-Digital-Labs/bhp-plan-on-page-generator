@@ -107,8 +107,8 @@ and the appendix all follow that one verdict.
 
 ## Download status and deleting
 
-The canvas PDF and the appendix PDF are tracked separately, and the user may delete their session once
-both have been downloaded for the current version; see [downloads.md](downloads.md).
+The canvas and the appendix are tracked separately, and the user may delete their session once
+both have been downloaded, in any format, for the current version; see [downloads.md](downloads.md).
 
 ## Sending by email
 

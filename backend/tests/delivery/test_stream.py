@@ -69,7 +69,7 @@ def test_a_failure_while_noting_delivery_never_breaks_the_download_and_is_logged
     assert "SECRET" not in repr([r.__dict__ for r in records])
 
 
-def test_only_the_pdf_of_each_document_is_noted():
+def test_every_format_of_a_document_is_noted_against_that_document():
     calls = []
 
     class Service:
@@ -79,8 +79,6 @@ def test_only_the_pdf_of_each_document_is_noted():
     class Snapshot:
         revision = 7
 
-    for fmt in ("pptx", "docx", "json"):
-        assert delivery_recorder(Service(), None, "canvas", Snapshot(), fmt) is None
-    recorder = delivery_recorder(Service(), None, "appendix", Snapshot(), "pdf")
-    recorder()
-    assert calls == [("appendix", 7)]
+    delivery_recorder(Service(), None, "canvas", Snapshot())()
+    delivery_recorder(Service(), None, "appendix", Snapshot())()
+    assert calls == [("canvas", 7), ("appendix", 7)]

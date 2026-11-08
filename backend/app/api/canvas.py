@@ -83,5 +83,5 @@ def download_canvas(
         raise problem(AppendixError("render_failed")) from None
     ensure_still_confirmed(service, session, revision)
     logger.info("canvas_downloaded", extra={"reason": file_format})
-    recorder = delivery_recorder(service, session, "canvas", snapshot, file_format)
+    recorder = delivery_recorder(service, session, "canvas", snapshot)
     return attachment(content, media_type, snapshot, "canvas", file_format, recorder)
