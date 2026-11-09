@@ -51,6 +51,7 @@ const PHASE_LABELS: Record<Phase, string | null> = {
   interview: null,
   clarification: "Clarifying a detail",
   data_and_systems: "Checking data and systems",
+  changing: "Changing an answer",
   review_ready: "Ready to review",
 };
 

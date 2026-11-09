@@ -700,17 +700,15 @@ test.describe("one-page canvas", () => {
       await page.goto("/review");
       await expect(card.getByRole("heading", { name: "Your documents" })).toBeVisible();
       await expect(card.locator("li", { hasText: "One-page canvas" })).toContainText("Not downloaded yet");
-      await expect(card).toContainText("Still to download: the one-page canvas.");
-      await expect(page.getByRole("button", { name: /^Delete my session/ })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeDisabled();
     }
-    await expect(card).toContainText("It cannot check that the file was saved on your device");
+    await expect(card).not.toContainText("Refresh status"); // the long explanation and the refresh are gone
 
     await page.unroute("**/api/downloads");
     await mockDownloads(page, true, false); // the canvas alone is enough
     await page.goto("/review");
     await expect(card.locator("li", { hasText: "One-page canvas" })).toContainText("Downloaded");
-    await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeVisible();
-    await expect(card).not.toContainText("Deleting is locked");
+    await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeEnabled();
   });
 
   test("download status: a failed status check keeps deleting locked and can be retried", async ({ page }) => {
@@ -719,10 +717,10 @@ test.describe("one-page canvas", () => {
     await page.route("**/api/downloads", (route) => route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "x", correlation_id: "0".repeat(32) } } }));
     await page.goto("/review");
     await expect(page.locator(".dl").getByRole("alert")).toContainText("We could not check the download status");
-    await expect(page.getByRole("button", { name: /^Delete my session/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeDisabled();
     await page.unroute("**/api/downloads");
     await mockDownloads(page, true, true);
-    await page.getByRole("button", { name: "Refresh status" }).click();
+    await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeVisible();
   });
 

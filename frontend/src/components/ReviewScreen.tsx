@@ -245,10 +245,9 @@ export function ReviewScreen({
           . {confirmed ? "" : "If anything is wrong, go back and tell the assistant what to change, before you confirm."}
         </p>
         {confirmed ? (
-          <p role="status" className="readback__done">
-            You confirmed this version, so it is final and cannot be changed. You can download it, or submit it by email, with the
-            buttons above. Downloads are saved on your own device. Submitting sends both documents as PDFs to one fixed address: you
-            cannot change who receives it or what it says.
+          <p role="status" className="readback__done readback__done--small">
+            You confirmed this version, so it is final. Download it or submit it by email with the buttons above.
+            Submitting emails both PDFs to one fixed address.
           </p>
         ) : (
           <div className="readback__actions">

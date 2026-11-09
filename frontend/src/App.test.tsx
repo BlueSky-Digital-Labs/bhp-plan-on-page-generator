@@ -264,8 +264,8 @@ describe("review route (read-back, confirmation and downloads)", () => {
         revision,
         canvas_downloaded: canvas,
         appendix_downloaded: appendix,
-        purge_eligible: canvas && appendix,
-        lock_reason: canvas && appendix ? null : canvas ? "appendix_not_downloaded" : appendix ? "canvas_not_downloaded" : "both_not_downloaded",
+        purge_eligible: canvas, // the one-page canvas alone unlocks deleting
+        lock_reason: canvas ? null : "canvas_not_downloaded",
       });
   const open = async (routes: Parameters<typeof mockApi>[0]) => {
     const api = mockApi({ "GET /api/session": SIGNED_IN, "GET /api/csrf": csrfRoute, "GET /api/downloads": downloads(), ...routes });
@@ -315,7 +315,7 @@ describe("review route (read-back, confirmation and downloads)", () => {
     await open({ "GET /api/conversation": review(3, 3) });
     expect(screen.queryByRole("button", { name: /Back to the conversation/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /go back and correct it/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("final and cannot be changed");
+    expect(screen.getByRole("status")).toHaveTextContent("so it is final");
   });
 
   it("lets the user go back to correct something through the conversation", async () => {
@@ -431,8 +431,8 @@ describe("review route (read-back, confirmation and downloads)", () => {
     it("shows the two documents for the confirmed revision, with deleting locked", async () => {
       await open({ "GET /api/conversation": review(3, 3) });
       expect(await screen.findByRole("heading", { level: 2, name: "Your documents" })).toBeInTheDocument();
-      expect(await screen.findByText(/Deleting is locked/)).toBeInTheDocument();
-      expect(deleteButton()).not.toBeInTheDocument();
+      expect(await screen.findByText(/Not downloaded yet/)).toBeInTheDocument();
+      expect(deleteButton()).toBeDisabled();
     });
 
     it("shows the status after confirming, for the revision just confirmed", async () => {
@@ -451,11 +451,11 @@ describe("review route (read-back, confirmation and downloads)", () => {
         "GET /api/downloads": [downloads(false, false), downloads(true, true)],
         "GET /api/canvas-file?format=pdf&revision=3": file(),
       });
-      await screen.findByText(/Deleting is locked/);
-      expect(deleteButton()).not.toBeInTheDocument();
+      await screen.findByText(/Not downloaded yet/);
+      expect(deleteButton()).toBeDisabled();
       await chooseDownload("Download canvas", "PDF");
       await waitFor(() => expect(saved).toHaveLength(1));
-      expect(await screen.findByRole("button", { name: /^Delete my session/ })).toBeInTheDocument();
+      await waitFor(() => expect(deleteButton()).toBeEnabled());
       expect(reads(calls)).toBeGreaterThanOrEqual(2);
     });
 
@@ -465,11 +465,11 @@ describe("review route (read-back, confirmation and downloads)", () => {
         "GET /api/downloads": downloads(false, false), // the server has not finished sending anything
         "GET /api/canvas-file?format=pdf&revision=3": file(),
       });
-      await screen.findByText(/Deleting is locked/);
+      await screen.findByText(/Not downloaded yet/);
       await chooseDownload("Download canvas", "PDF");
       await waitFor(() => expect(saved).toHaveLength(1));
-      await waitFor(() => expect(screen.getByText(/Deleting is locked/)).toBeInTheDocument());
-      expect(deleteButton()).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText(/Not downloaded yet/)).toBeInTheDocument());
+      expect(deleteButton()).toBeDisabled();
     });
 
     it("re-reads the canvas when the status belongs to a newer revision", async () => {

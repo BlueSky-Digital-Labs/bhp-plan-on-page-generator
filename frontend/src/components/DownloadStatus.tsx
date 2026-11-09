@@ -4,13 +4,9 @@ import { type DownloadStatus as Status, getDownloadStatus, purgeSession } from "
 import { ConfirmDialog } from "./ConfirmDialog";
 
 // A download can finish just after the first status check, so after each download attempt the
-// status is read again a couple of times, then left to the manual "Refresh status" button.
+// status is read again a few times, then left until the next attempt (or "Check again" after a failed read).
 const FOLLOW_UPS_MS = [1500, 4000, 10000];
 
-// Fixed copy keyed on the lock reason: nothing from the response is shown.
-const OUTSTANDING: Record<string, string> = {
-  canvas_not_downloaded: "the one-page canvas",
-};
 const OUT_OF_DATE_PURGE = "The canvas changed since it was shown. Please read it again before continuing.";
 
 // The same panel serves a finished canvas ("final": delete the session) and an unfinished one the
@@ -19,11 +15,7 @@ const OUT_OF_DATE_PURGE = "The canvas changed since it was shown. Please read it
 const COPY = {
   final: {
     heading: "Your documents",
-    locked: "Deleting is locked.",
-    otherLock: "The current canvas must be confirmed and the one-page canvas downloaded first.",
     failedCheck: "We could not check the download status. Deleting stays locked until it has been checked.",
-    ready: "The one-page canvas has been downloaded. You can delete this session when you are ready.",
-    help: "Save the documents somewhere you can find them before you delete anything.",
     open: "Delete my session…",
     confirmTitle: "Delete this session now?",
     confirmBody: "Your conversation, canvas and documents are removed from the server and cannot be recovered.",
@@ -35,11 +27,7 @@ const COPY = {
   },
   draft: {
     heading: "Save your progress",
-    locked: "Stopping is locked.",
-    otherLock: "Answer at least one question, then download the one-page canvas.",
     failedCheck: "We could not check the download status. Stopping stays locked until it has been checked.",
-    ready: "The one-page canvas has been downloaded. You can stop this session when you are ready.",
-    help: "Save the documents somewhere you can find them before you stop.",
     open: "Stop session…",
     confirmTitle: "Stop this session now?",
     confirmBody:
@@ -58,8 +46,8 @@ type State =
   | { phase: "ready"; status: Status }
   | { phase: "failed" };
 
-// Shows, for the current revision, whether the server has finished sending each document, why deleting
-// is locked, and the delete action only when the server says both are done. "Downloaded" means the
+// Shows, for the current revision, whether the server has finished sending the one-page canvas, and the
+// delete action, which unlocks only when the server says it was sent. "Downloaded" means the
 // server sent the whole file: it cannot know whether the browser kept it or the user saved it.
 export function DownloadStatus({
   revision,
@@ -177,6 +165,24 @@ export function DownloadStatus({
     />
   );
 
+  const stopButton = (
+    <button
+      type="button"
+      className="button--danger dl__stop"
+      disabled={!eligible}
+      aria-describedby={eligible ? undefined : "dl-stop-hint"}
+      title={eligible ? undefined : copy.lockedHint}
+      onClick={() => setConfirming(true)}
+    >
+      {copy.open}
+    </button>
+  );
+  const stopHint = !eligible && (
+    <span id="dl-stop-hint" className="sr-only">
+      {copy.lockedHint}
+    </span>
+  );
+
   if (variant === "draft") {
     // The half-way card is just the download buttons and the way to stop, which unlocks the moment the
     // one-page canvas has been downloaded. Everything else is left out to keep it small.
@@ -186,24 +192,14 @@ export function DownloadStatus({
           {copy.heading}
         </h2>
         {children}
-        <button
-          type="button"
-          className="button--danger dl__stop"
-          disabled={!eligible}
-          aria-describedby={eligible ? undefined : "dl-stop-hint"}
-          title={eligible ? undefined : copy.lockedHint}
-          onClick={() => setConfirming(true)}
-        >
-          {copy.open}
-        </button>
-        {!eligible && (
-          <span id="dl-stop-hint" className="sr-only">
-            {copy.lockedHint}
-          </span>
-        )}
+        {stopButton}
+        {stopHint}
         {state.phase === "failed" && (
           <p role="alert" className="notice">
-            {copy.failedCheck}
+            {copy.failedCheck}{" "}
+            <button type="button" className="button--secondary" onClick={() => void refresh()}>
+              Check again
+            </button>
           </p>
         )}
         {notice && (
@@ -224,39 +220,15 @@ export function DownloadStatus({
 
       {state.phase === "failed" && (
         <p role="alert" className="notice">
-          {copy.failedCheck}
-        </p>
-      )}
-      {status && !status.purge_eligible && (
-        <p className="dl__locked">
-          <strong>{copy.locked}</strong>{" "}
-          {OUTSTANDING[status.lock_reason ?? ""]
-            ? `Still to download: ${OUTSTANDING[status.lock_reason ?? ""]}.`
-            : copy.otherLock}
-        </p>
-      )}
-      {status?.purge_eligible && (
-        <p role="status" className="readback__done">
-          {copy.ready}
-        </p>
-      )}
-
-      <p className="dl__help">
-        {copy.help} &ldquo;Downloaded&rdquo; means this app finished sending the file to your browser. It cannot check that
-        the file was saved on your device, and nothing is submitted to a backlog. If a download is slow, the status may take
-        a moment: choose Refresh status, which does not download the file again.
-      </p>
-
-      <div className="dl__actions">
-        <button type="button" className="button--secondary" onClick={() => void refresh()} disabled={state.phase === "checking"}>
-          Refresh status
-        </button>
-        {eligible && (
-          <button type="button" className="button--danger" onClick={() => setConfirming(true)}>
-            {copy.open}
+          {copy.failedCheck}{" "}
+          <button type="button" className="button--secondary" onClick={() => void refresh()}>
+            Check again
           </button>
-        )}
-      </div>
+        </p>
+      )}
+
+      {stopButton}
+      {stopHint}
       {notice && (
         <p role="alert" className="notice">
           {notice}

@@ -88,16 +88,16 @@ character limit on attached text, which is cut at a word.
 
 ## On screen
 
-On the review page, once the canvas is confirmed, a **Your documents** card (on the conversation screen, the **Save your progress** card, with its own wording) shows each document as
-the one-page canvas as "Downloaded" or "Not downloaded yet" (words and symbols, not colour alone), a
-locked explanation, guidance to save the documents, and a **Refresh status** button. The
-**Delete my session** button appears only when the server says the canvas was downloaded, and asks for
-one more confirmation in a window over the page. The page:
+On the review page, once the canvas is confirmed, a **Your documents** card shows just the one-page
+canvas as "Downloaded" or "Not downloaded yet" (words and symbols, not colour alone) and the
+**Delete my session** button, which stays locked (with the reason available to assistive technology)
+until the server says the canvas was downloaded. It asks for one more confirmation in a window over
+the page. There is no explanatory text and no refresh button; after a failed status read a **Check
+again** button appears. The confirmation line above says only that the version is final. The page:
 
 * reads the status on arrival, after each download attempt, and three more times (1.5 s, 4 s and 10 s
-  later) because a file can finish just after the first read; then it stops (the review card also has
-  the manual button);
-* hides the delete action while a read is in flight and drops it if a read fails (no stale
+  later) because a file can finish just after the first read; then it stops;
+* locks the delete action while a read is in flight and if a read fails (no stale
   eligibility), keeps only the newest read's answer, and re-reads the canvas if the status is for a
   different revision (another tab answered);
 * returns to entry if the session ended, and shows fixed text for every failure.

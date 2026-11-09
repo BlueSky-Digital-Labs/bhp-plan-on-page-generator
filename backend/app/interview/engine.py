@@ -9,10 +9,18 @@ changes nothing.
 
 import copy
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 from app.attachments.markers import typed_part
+from app.interview.amend import (
+    PICK_OPTIONS,
+    SHORT_NAMES,
+    is_done,
+    is_negative,
+    mentioned_fields,
+)
 from app.interview.canvas import (
     ALL_FIELDS,
     OPPORTUNITY_TYPES,
@@ -24,17 +32,23 @@ from app.interview.canvas import (
     priority_key,
 )
 from app.interview.prompts import (
+    AMEND_GAVE_UP,
+    AMEND_LEFT,
+    AMEND_PICK,
+    AMEND_PICK_AGAIN,
     AMEND_REPLIES,
     READY_TEXT,
     TIPS,
     acknowledgement,
+    amend_done,
+    amend_revise,
     render_question,
     validate_question,
 )
 
-Kind = Literal["missing", "clarify", "confirm", "optional", "probe"]
+Kind = Literal["missing", "clarify", "confirm", "optional", "probe", "pick", "revise"]
 Stance = Literal["answered", "unsure", "declined", "affirm"]
-Phase = Literal["interview", "clarification", "data_and_systems", "review_ready"]
+Phase = Literal["interview", "clarification", "data_and_systems", "changing", "review_ready"]
 
 
 @dataclass(frozen=True)
@@ -191,10 +205,14 @@ def choices_for(target: Target, s: InterviewState) -> dict[str, Any] | None:
     value are not about the list, so they are typed. Picking an option sends its wording as the
     user's answer, so every rule about typed words (the priority is only ever the user's own) holds.
     """
+    if target.kind == "pick":  # which part to change: every part, by name
+        return {"multiple": False, "options": list(PICK_OPTIONS)}
     spec = CHOICE_FIELDS.get(target.field)
     if spec is None:
         return None
-    if target.kind == "missing" or (target.kind == "clarify" and target.field not in s.conflicts):
+    if target.kind in ("missing", "revise") or (
+        target.kind == "clarify" and target.field not in s.conflicts
+    ):
         options, multiple = spec
         return {"multiple": multiple, "options": list(options)}
     return None
@@ -214,6 +232,8 @@ def progression_view(s: InterviewState) -> dict[str, Any]:
     t = s.target
     if is_ready(s):
         phase: Phase = "review_ready"
+    elif t is not None and t.kind in ("pick", "revise"):
+        phase = "changing"
     elif t is not None and t.kind == "clarify":
         phase = "clarification"
     elif t is not None and t.kind == "confirm":
@@ -264,6 +284,10 @@ class Interviewer:
         override = looks_like_override(user_text)
         cue: str | None = None  # a key of ACK: what happened with this answer
 
+        if target is not None and target.kind in ("pick", "revise"):
+            return self._amend_turn(
+                s, target, user_text, user_turn_id, user_turn_ids, stance, override
+            )
         if target is not None and target.kind == "confirm":
             captured = self._confirm(s, target.field, user_text, stance, override)
             s.confirmed.add(target.field)
@@ -286,6 +310,8 @@ class Interviewer:
                 cue = "conflict"
             elif captured:
                 cue = "captured"
+            elif amending and not override:  # after "that's everything": which part to change?
+                return self._start_amend(s, user_text)
             else:  # nothing usable was captured
                 if target is not None and target.kind == "optional":
                     s.declined.add(target.field)  # an optional answer we cannot use never blocks
@@ -295,6 +321,107 @@ class Interviewer:
             return self._finish(s, cue, extraction.next_question, len(user_turn_ids), amending)
 
         return self._finish(s, cue, None, len(user_turn_ids), amending)
+
+    # -- changing an answer after "that's everything" ---------------------------------------------
+    @staticmethod
+    def _leave_alone(s: InterviewState, text: str) -> Outcome:
+        s.target, s.question = None, None
+        s.attempts.pop("amend", None)
+        return Outcome(text, s, "ready_for_review")
+
+    @staticmethod
+    def _ask(s: InterviewState, target: Target, text: str) -> Outcome:
+        s.target, s.question = target, text
+        return Outcome(text, s, "ask")
+
+    def _ask_pick(self, s: InterviewState, *, again: bool) -> Outcome:
+        return self._ask(s, Target("pick", "canvas"), AMEND_PICK_AGAIN if again else AMEND_PICK)
+
+    def _ask_revise(self, s: InterviewState, fld: str, *, again: bool = False) -> Outcome:
+        target = Target("revise", fld)
+        value = s.canvas.get(fld, "")
+        current = ", ".join(value) if isinstance(value, list) else str(value)
+        current = current.strip().rstrip(".!?")
+        if len(current) > 140:
+            current = current[:140].rstrip() + "…"
+        spec = CHOICE_FIELDS.get(fld)
+        text = amend_revise(
+            SHORT_NAMES[fld],
+            current,
+            choices=spec is not None,
+            multiple=bool(spec and spec[1]),
+            again=again,
+        )
+        return self._ask(s, target, text)
+
+    def _start_amend(self, s: InterviewState, user_text: str) -> Outcome:
+        """The user spoke after "that's everything" without giving a usable new answer."""
+        typed = typed_part(user_text)
+        if is_done(typed):
+            return self._leave_alone(s, READY_TEXT)
+        found = mentioned_fields(typed)
+        if len(found) == 1:
+            return self._ask_revise(s, found[0])
+        return self._ask_pick(s, again=False)
+
+    def _amend_turn(
+        self,
+        s: InterviewState,
+        target: Target,
+        user_text: str,
+        user_turn_id: str,
+        user_turn_ids: tuple[str, ...],
+        stance: Stance,
+        override: bool,
+    ) -> Outcome:
+        typed = typed_part(user_text)
+        found = mentioned_fields(typed)
+        if override:
+            reply = f"{acknowledgement('override', len(user_turn_ids))} {s.question or ''}".strip()
+            return Outcome(reply, s, "ask")  # same question, nothing changed
+        if target.kind == "pick":
+            if len(found) == 1:
+                return self._ask_revise(s, found[0])
+            if is_negative(typed):
+                return self._leave_alone(s, AMEND_LEFT)
+            return self._amend_again(s, lambda: self._ask_pick(s, again=True))
+        # revise: the message is the new answer for this one part, unless it says "no"
+        if is_negative(typed):
+            other = [f for f in found if f != target.field]
+            if len(other) == 1:
+                return self._ask_revise(s, other[0])
+            return self._leave_alone(s, AMEND_LEFT)
+        if stance in ("unsure", "declined"):
+            return self._leave_alone(s, AMEND_LEFT)
+        extraction = self._extractor.extract(
+            ExtractionInput(user_text, user_turn_id, user_turn_ids, target, s.canvas, False)
+        )
+        for update in extraction.field_updates:
+            if update.field != target.field:
+                continue
+            if not update.source_turn_ids or not set(update.source_turn_ids) <= set(user_turn_ids):
+                continue
+            value = clean_value(update.field, update.value)
+            if value is None:
+                continue
+            if update.field == "priority" and not self._is_user_priority_choice(
+                target, value, typed
+            ):
+                continue
+            s.canvas[update.field] = (
+                value  # the user asked for this change: it replaces the old one
+            )
+            s.unknown.discard(update.field)
+            s.conflicts.pop(update.field, None)
+            return self._leave_alone(s, amend_done(SHORT_NAMES[update.field]))
+        return self._amend_again(s, lambda: self._ask_revise(s, target.field, again=True))
+
+    def _amend_again(self, s: InterviewState, ask: Callable[[], Outcome]) -> Outcome:
+        """One more try, then the canvas is left as it was: it never stays stuck on a question."""
+        s.attempts["amend"] = s.attempts.get("amend", 0) + 1
+        if s.attempts["amend"] >= 2:
+            return self._leave_alone(s, AMEND_GAVE_UP)
+        return ask()
 
     # -- applying proposals ---------------------------------------------------------------------
     def _apply(

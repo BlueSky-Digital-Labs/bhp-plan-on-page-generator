@@ -72,11 +72,25 @@ typed. The browser has no copy of the lists: it shows whatever the server sends.
 
 ### Changing something after "That's everything I need"
 
-The user can keep talking until they confirm the canvas on the review page. A different value for an
-answered field is asked about first (the contradiction rule below), then applied when they choose it.
-The priority can be changed too, but only when the user's own words say "priority" and name the new
-one. A message that cannot be read as a change gets a fixed reply saying how to ask for one (“Change
-the team to Operations”), not the closing line again. Opportunity types can be added to, not removed.
+The user can keep talking until they confirm the canvas on the review page, and does not have to
+remember a field or an option (`amend.py`, deterministic, no model involved in choosing the part):
+
+* **They name one part without a new answer** ("I want to update the opportunity"): the assistant asks
+  for the new answer to that part only ("Okay. Right now Opportunity type is …. Which ones would you
+  like instead?"). For Priority and Opportunity type the options are shown again as a selection.
+* **They name no part, or several, or it is unclear** ("can you fix something?"): the assistant asks
+  "Which part would you like to change?" with all 16 parts as a selection (a small scrolling list), or
+  they can type it in their own words. Picking one goes to the step above.
+* **The new answer replaces the old one** (no "which one should I keep?" question: asking to change it
+  is the consent). A priority must still be one of the three; opportunity types are replaced, not
+  added to. Nothing else changes.
+* **"No", "never mind", "cancel" or a thank-you** leaves the canvas as it was and returns to ready; so
+  do two replies in a row that cannot be understood. "No, I meant the team" switches to the team.
+* While this is open the phase is `changing` ("Changing an answer") and the canvas is not ready, so
+  **Generate canvas** is hidden until it is settled.
+* A message that already states a new value for an answered field ("Change the team to Finance") is
+  still handled by the contradiction rule below (it asks which to keep). The priority can be changed
+  that way only when the user's own words say "priority" and name the new one.
 
 Once the user confirms the canvas ("Yes, this is correct"), it is **final**: the server refuses
 further answers (`409 canvas_confirmed`), the review page has no way back to the conversation, and

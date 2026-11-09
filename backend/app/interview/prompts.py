@@ -27,6 +27,8 @@ Rules:
   does not clearly match, record nothing.
 - When the question target is "none" the canvas is already complete and the user is correcting or
   adding to it: record each field they say should change, using the new wording they gave.
+- When the question target is "revise: <field>", the user is giving the new answer for that one
+  field: record only that field, in their new wording.
 - Never set priority unless the user explicitly chose Must-have, Nice-to-have or Exploratory.
 - If the user is unsure or declines, record nothing for that field.
 - If a message says something that contradicts an earlier answer, record the new statement; the
@@ -63,14 +65,36 @@ READY_TEXT = "That's everything I need. Have a look at the canvas whenever you'r
 # from an earlier answer is asked about first (the contradiction question), so these are the rest.
 AMEND_REPLIES: dict[str, str] = {
     "captured": "Thanks, I've added that. Have a look at the canvas whenever you're ready.",
-    "nothing": (
-        "I couldn't tell which part to change. Say which part and what it should be, for example "
-        "“Change the team to Operations” or “Change the priority to Exploratory”."
-    ),
     "unsure": "No problem, I've left the canvas as it is. Have a look whenever you're ready.",
     "declined": "No problem, I've left the canvas as it is. Have a look whenever you're ready.",
     "override": "I can only help with completing the canvas. Have a look whenever you're ready.",
 }
+
+
+# Changing an answer: which part, then the new answer. One question each.
+AMEND_PICK = "Which part would you like to change? Pick one below, or tell me in your own words."
+AMEND_PICK_AGAIN = (
+    "Sorry, I couldn't tell which part you meant. Pick one below, or say “never mind” to leave "
+    "the canvas as it is."
+)
+AMEND_LEFT = "No problem, I've left the canvas as it is. Have a look whenever you're ready."
+AMEND_GAVE_UP = (
+    "I still couldn't tell, so I've left the canvas as it is. Have a look whenever you're ready."
+)
+
+
+def amend_revise(name: str, current: str, *, choices: bool, multiple: bool, again: bool) -> str:
+    """Asks for the new answer to one part. `current` is the user's own words, shortened."""
+    lead = "Sorry, I couldn't use that. " if again else "Okay. "
+    if choices:
+        which = "Which ones" if multiple else "Which one"
+        more = " You can pick more than one." if multiple else ""
+        return f"{lead}Right now {name} is {current}. {which} would you like instead?{more}"
+    return f"{lead}Right now {name} says “{current}”. What should it say instead?"
+
+
+def amend_done(name: str) -> str:
+    return f"Done, I've updated {name}. Have a look at the canvas whenever you're ready."
 
 
 def acknowledgement(cue: str, turn_number: int) -> str:

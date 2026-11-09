@@ -177,6 +177,7 @@ describe("interview phase", () => {
   it.each([
     ["clarification", "Clarifying a detail"],
     ["data_and_systems", "Checking data and systems"],
+    ["changing", "Changing an answer"],
     ["review_ready", "Ready to review"],
   ])("shows when the server says the interview is in %s", async (phase, label) => {
     setup({ "GET /api/conversation": withPhase(phase) });

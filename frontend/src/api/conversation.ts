@@ -15,7 +15,7 @@ export interface CanvasView {
 }
 
 // Where the guided interview is. Computed by the server; the page only shows it.
-export type Phase = "interview" | "clarification" | "data_and_systems" | "review_ready";
+export type Phase = "interview" | "clarification" | "data_and_systems" | "changing" | "review_ready";
 // Set only when the answer is one (or several) of a fixed list. The server owns the list; the page
 // shows whatever it is sent.
 export interface Choices {
