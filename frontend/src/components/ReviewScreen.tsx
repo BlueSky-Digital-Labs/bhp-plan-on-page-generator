@@ -180,9 +180,12 @@ export function ReviewScreen({
   return (
     <>
       <div className="review-actions">
-        <button type="button" className="button--secondary" onClick={onBack}>
-          Back to the conversation
-        </button>
+        {/* Once confirmed the canvas is final: there is no way back to change it. */}
+        {!confirmed && (
+          <button type="button" className="button--secondary" onClick={onBack}>
+            Back to the conversation
+          </button>
+        )}
         {confirmed && (
           <>
             <DownloadMenu
@@ -239,13 +242,13 @@ export function ReviewScreen({
               and for the priority, <strong>{priority}</strong>, which is the one you chose
             </>
           ) : null}
-          . If anything is wrong, go back and tell the assistant what to change.
+          . {confirmed ? "" : "If anything is wrong, go back and tell the assistant what to change, before you confirm."}
         </p>
         {confirmed ? (
           <p role="status" className="readback__done">
-            You confirmed this version. You can download it, or submit it by email, with the buttons above. Downloads are saved on your own
-            device. Submitting sends both documents as PDFs to one fixed address: you cannot change who receives it or what it says.
-            If you change anything, you will need to confirm again.
+            You confirmed this version, so it is final and cannot be changed. You can download it, or submit it by email, with the
+            buttons above. Downloads are saved on your own device. Submitting sends both documents as PDFs to one fixed address: you
+            cannot change who receives it or what it says.
           </p>
         ) : (
           <div className="readback__actions">

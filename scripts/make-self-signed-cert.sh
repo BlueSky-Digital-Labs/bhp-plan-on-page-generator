@@ -29,7 +29,7 @@ chmod 700 "$dir"
 
 openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 365 \
   -keyout "$dir/key.pem" -out "$dir/cert.pem" \
-  -subj "/CN=${host}/O=Plan on a Page TEST (self-signed)" \
+  -subj "/CN=${host}/O=SCP AI Ideation assistant TEST (self-signed)" \
   -addext "subjectAltName=DNS:${host}" 2> "$dir/openssl.log" \
   || { cat "$dir/openssl.log" >&2; exit 1; }
 chmod 600 "$dir/key.pem" "$dir/cert.pem"

@@ -7,7 +7,7 @@ Bump PROMPT_VERSION whenever any wording below changes and re-run the question t
 import re
 from typing import Any
 
-PROMPT_VERSION = "2026-11-05.1"
+PROMPT_VERSION = "2026-11-09.1"
 
 SYSTEM_PROMPT = """\
 You help a colleague fill in an AI opportunity canvas by turning what they say into canvas fields.
@@ -25,6 +25,8 @@ Rules:
 - For opportunityTypes you may map what the user says they want AI to do onto the allowed names
   when it clearly matches (for example "write the handover report" is Generate Reports). If it
   does not clearly match, record nothing.
+- When the question target is "none" the canvas is already complete and the user is correcting or
+  adding to it: record each field they say should change, using the new wording they gave.
 - Never set priority unless the user explicitly chose Must-have, Nice-to-have or Exploratory.
 - If the user is unsure or declines, record nothing for that field.
 - If a message says something that contradicts an earlier answer, record the new statement; the
@@ -57,6 +59,18 @@ ACK: dict[str, tuple[str, ...]] = {
     "kept_earlier": ("I still couldn't tell which you meant, so I've kept what you said first.",),
 }
 READY_TEXT = "That's everything I need. Have a look at the canvas whenever you're ready."
+# After "that's everything", when the user comes back to change something. A change that differs
+# from an earlier answer is asked about first (the contradiction question), so these are the rest.
+AMEND_REPLIES: dict[str, str] = {
+    "captured": "Thanks, I've added that. Have a look at the canvas whenever you're ready.",
+    "nothing": (
+        "I couldn't tell which part to change. Say which part and what it should be, for example "
+        "“Change the team to Operations” or “Change the priority to Exploratory”."
+    ),
+    "unsure": "No problem, I've left the canvas as it is. Have a look whenever you're ready.",
+    "declined": "No problem, I've left the canvas as it is. Have a look whenever you're ready.",
+    "override": "I can only help with completing the canvas. Have a look whenever you're ready.",
+}
 
 
 def acknowledgement(cue: str, turn_number: int) -> str:

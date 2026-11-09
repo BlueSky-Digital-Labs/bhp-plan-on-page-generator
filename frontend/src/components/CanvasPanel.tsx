@@ -22,13 +22,7 @@ function show(value: string | string[] | undefined): string | null {
 
 // Shows what the server has recorded in the draft. It only ever displays; the validator and the
 // interviewer on the server decide what is complete. Values render as text (React escapes them).
-export function CanvasPanel({
-  canvas = EMPTY,
-  onGenerate,
-}: {
-  canvas?: CanvasView;
-  onGenerate?: () => void;
-}) {
+export function CanvasPanel({ canvas = EMPTY }: { canvas?: CanvasView }) {
   const remaining = canvas.missing_required.length;
   const answered = Math.min(REQUIRED_TOTAL, Math.max(0, REQUIRED_TOTAL - remaining));
   const percent = canvas.ready_for_review ? 100 : Math.round((answered / REQUIRED_TOTAL) * 100);
@@ -46,11 +40,6 @@ export function CanvasPanel({
             ? `${remaining} required answer${remaining === 1 ? "" : "s"} still to go.`
             : "Nearly there: a few last questions."}
       </p>
-      {canvas.ready_for_review && onGenerate && (
-        <button type="button" className="canvas-panel__generate" onClick={onGenerate}>
-          Generate canvas
-        </button>
-      )}
       {/* A small box that scrolls. Focusable and labelled so keyboard users can scroll it too. */}
       <div className="canvas-panel__scroll" role="region" aria-label="Canvas fields so far" tabIndex={0}>
         <dl>

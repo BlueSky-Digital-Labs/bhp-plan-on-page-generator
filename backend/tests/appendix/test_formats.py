@@ -74,7 +74,7 @@ def pdf_pages(data: bytes, *, keep_chrome: bool = False) -> list[str]:
     pages = [page.extract_text() or "" for page in PdfReader(io.BytesIO(data)).pages]
     if keep_chrome:
         return pages
-    chrome = re.compile(r"^(Page \d+ of \d+|Plan on a Page: Appendix · revision \d+)$")
+    chrome = re.compile(r"^(Page \d+ of \d+|SCP AI Ideation assistant: Appendix · revision \d+)$")
     return ["\n".join(ln for ln in p.split("\n") if not chrome.match(ln.strip())) for p in pages]
 
 

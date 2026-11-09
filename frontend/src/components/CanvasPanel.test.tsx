@@ -1,6 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { CanvasView } from "../api/conversation";
 import { missingRequired, emptyCanvas } from "../canvas/fields";
 import { CanvasPanel } from "./CanvasPanel";
@@ -77,20 +76,5 @@ describe("CanvasPanel", () => {
   it("tolerates a missing canvas (no interviewer attached)", () => {
     render(<CanvasPanel />);
     expect(screen.getAllByText("Not answered yet")).toHaveLength(16);
-  });
-
-  it("offers 'Generate canvas' only when the server says the canvas is ready", async () => {
-    const onGenerate = vi.fn();
-    const { rerender } = render(<CanvasPanel canvas={view({ missing_required: ["team"] })} onGenerate={onGenerate} />);
-    expect(screen.queryByRole("button", { name: "Generate canvas" })).not.toBeInTheDocument();
-
-    rerender(<CanvasPanel canvas={view({ ready_for_review: true })} onGenerate={onGenerate} />);
-    await userEvent.click(screen.getByRole("button", { name: "Generate canvas" }));
-    expect(onGenerate).toHaveBeenCalledTimes(1);
-  });
-
-  it("never shows the button without a handler, however the data looks", () => {
-    render(<CanvasPanel canvas={view({ ready_for_review: true })} />);
-    expect(screen.queryByRole("button", { name: "Generate canvas" })).not.toBeInTheDocument();
   });
 });

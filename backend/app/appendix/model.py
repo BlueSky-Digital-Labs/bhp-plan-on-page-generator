@@ -87,7 +87,7 @@ class AppendixInput:
     summary: Summary
     sections: tuple[AnswerSection, ...]
     turns: tuple[QATurn, ...]
-    app_name: str = "Plan on a Page"  # from configuration; shown in the document title
+    app_name: str = "SCP AI Ideation assistant"  # from configuration; shown in the document title
     draft: bool = False  # an unfinished canvas saved to carry on later
 
     @property
@@ -168,7 +168,9 @@ def _summary(sections: tuple[AnswerSection, ...], turns: tuple[QATurn, ...]) -> 
     return Summary(tuple(facts), key_answers)
 
 
-def build_input(snapshot: ExportSnapshot, app_name: str = "Plan on a Page") -> AppendixInput:
+def build_input(
+    snapshot: ExportSnapshot, app_name: str = "SCP AI Ideation assistant"
+) -> AppendixInput:
     declined = frozenset(snapshot.declined)
     sections = tuple(
         AnswerSection(title, tuple(_answer(f, snapshot.canvas, declined) for f in fields))

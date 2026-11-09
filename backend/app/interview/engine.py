@@ -24,6 +24,7 @@ from app.interview.canvas import (
     priority_key,
 )
 from app.interview.prompts import (
+    AMEND_REPLIES,
     READY_TEXT,
     TIPS,
     acknowledgement,
@@ -258,6 +259,7 @@ class Interviewer:
     ) -> Outcome:
         s = copy.deepcopy(state)
         target = s.target
+        amending = is_ready(state)  # a finished canvas the user is coming back to correct
         stance = detect_stance(typed_part(user_text), target)  # only what they typed
         override = looks_like_override(user_text)
         cue: str | None = None  # a key of ACK: what happened with this answer
@@ -277,7 +279,7 @@ class Interviewer:
             extraction = self._extractor.extract(
                 ExtractionInput(user_text, user_turn_id, user_turn_ids, target, s.canvas, override)
             )
-            captured = self._apply(s, extraction, target, user_text, user_turn_ids)
+            captured = self._apply(s, extraction, target, user_text, user_turn_ids, amending)
             if override:
                 cue = "override"
             elif s.conflicts:
@@ -290,9 +292,9 @@ class Interviewer:
                 elif target is not None:
                     s.attempts[target.field] = s.attempts.get(target.field, 0) + 1
                 cue = "nothing"
-            return self._finish(s, cue, extraction.next_question, len(user_turn_ids))
+            return self._finish(s, cue, extraction.next_question, len(user_turn_ids), amending)
 
-        return self._finish(s, cue, None, len(user_turn_ids))
+        return self._finish(s, cue, None, len(user_turn_ids), amending)
 
     # -- applying proposals ---------------------------------------------------------------------
     def _apply(
@@ -302,6 +304,7 @@ class Interviewer:
         target: Target | None,
         user_text: str,
         user_turn_ids: tuple[str, ...],
+        amending: bool = False,
     ) -> bool:
         captured = False
         for update in extraction.field_updates:
@@ -316,19 +319,23 @@ class Interviewer:
                 target,
                 value,
                 typed_part(user_text),  # never from an attached file
+                amending,
             ):
                 continue  # priority is only ever the user's explicit choice
             captured |= self._set(s, update.field, value, target)
         return captured
 
     @staticmethod
-    def _is_user_priority_choice(target: Target | None, value: Any, user_text: str) -> bool:
-        return (
-            target is not None
-            and target.field == "priority"
-            and value in PRIORITIES
-            and priority_key(str(value)) in priority_key(user_text)
-        )
+    def _is_user_priority_choice(
+        target: Target | None, value: Any, user_text: str, amending: bool = False
+    ) -> bool:
+        if value not in PRIORITIES or priority_key(str(value)) not in priority_key(user_text):
+            return False
+        if target is not None and target.field == "priority":
+            return True
+        # Coming back to a finished canvas, the priority can be changed only when the user's own
+        # words say "priority" and name the new one.
+        return amending and target is None and "priority" in user_text.casefold()
 
     @staticmethod
     def _set(s: InterviewState, fld: str, value: Any, target: Target | None) -> bool:
@@ -414,12 +421,19 @@ class Interviewer:
 
     # -- composing the reply --------------------------------------------------------------------
     def _finish(
-        self, s: InterviewState, cue: str | None, model_question: str | None, turn_number: int
+        self,
+        s: InterviewState,
+        cue: str | None,
+        model_question: str | None,
+        turn_number: int,
+        amending: bool = False,
     ) -> Outcome:
         nxt = choose_target(s)
         s.target = nxt
         if nxt is None:
             s.question = None
+            if amending and cue in AMEND_REPLIES:  # said something after "that's everything"
+                return Outcome(AMEND_REPLIES[cue], s, "ready_for_review")
             return Outcome(READY_TEXT, s, "ready_for_review")
         if nxt.kind == "optional":
             s.prompted.add(nxt.field)  # recorded only when this turn is committed (i.e. shown)

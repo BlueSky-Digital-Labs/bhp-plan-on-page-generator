@@ -16,7 +16,11 @@ def settings(tmp_path, **kwargs) -> Settings:
 
 def test_the_defaults_keep_todays_wording(tmp_path):
     s = settings(tmp_path)
-    assert (s.app_name, s.header_text, s.footer_text) == ("Plan on a Page", "Plan on a Page", "BHP")
+    assert (s.app_name, s.header_text, s.footer_text) == (
+        "SCP AI Ideation assistant",
+        "SCP AI Ideation assistant",
+        "BHP",
+    )
 
 
 def test_the_names_can_be_set_without_a_rebuild_and_are_tidied(tmp_path):
@@ -45,8 +49,8 @@ def test_the_page_reads_the_names_from_the_server_with_no_session_needed(world):
     response = client.get("/api/branding")
     assert response.status_code == 200
     assert response.json() == {
-        "app_name": "Plan on a Page",
-        "header_text": "Plan on a Page",
+        "app_name": "SCP AI Ideation assistant",
+        "header_text": "SCP AI Ideation assistant",
         "footer_text": "BHP",
     }
     assert response.headers["cache-control"] == "no-store"  # never cached: a change shows at once
@@ -71,6 +75,9 @@ def test_the_appendix_carries_the_configured_name(world):
     import zipfile
 
     xml = zipfile.ZipFile(io.BytesIO(docx.content)).read("word/document.xml").decode()
-    assert "Integrated Operations: Appendix" in xml and "Plan on a Page: Appendix" not in xml
+    assert (
+        "Integrated Operations: Appendix" in xml
+        and "SCP AI Ideation assistant: Appendix" not in xml
+    )
     pdf = appendix(client, "pdf")
     assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")

@@ -30,7 +30,7 @@ const CID = "0123456789abcdef0123456789abcdef";
 test("page renders and completes a real API round trip", async ({ page }) => {
   await signInAndWait(page);
   await page.goto("/canvas"); // the original template form and status panel
-  await expect(page.getByRole("heading", { name: "Plan on a Page", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "SCP AI Ideation assistant", level: 1 })).toBeVisible();
   // Status "ok" is the API's healthy contract. The environment name depends on how the
   // backend was started (test here, deployed in AWS), so only require one.
   await expect(page.getByTestId("status-result")).toHaveText(/^Service is ok \(\w+\)\.$/);
@@ -513,6 +513,7 @@ test.describe("one-page canvas", () => {
 
     await page.getByRole("button", { name: "Yes, this is correct" }).click();
     await expect(page.getByRole("status")).toContainText("You confirmed this version");
+    await expect(page.getByRole("button", { name: /Back to the conversation/ })).toHaveCount(0); // final once confirmed
 
     const files = [
       ["Download canvas", "PDF", "canvas-file?format=pdf", "shift-notes-assistant-canvas-r3.pdf"],
@@ -766,9 +767,9 @@ test.describe("one-page canvas", () => {
     await expect(page.getByRole("banner").getByRole("img", { name: "BHP" })).toBeVisible();
     const logo = await page.getByRole("banner").getByRole("img", { name: "BHP" }).evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0);
     expect(logo).toBe(true); // the logo file is really served
-    await expect(page.getByRole("banner")).toContainText("Plan on a Page"); // the default; set HEADER_TEXT to change it
+    await expect(page.getByRole("banner")).toContainText("SCP AI Ideation assistant"); // the default; set HEADER_TEXT to change it
     await expect(page.getByRole("contentinfo")).toContainText("BHP");
-    await expect(page).toHaveTitle("Plan on a Page");
+    await expect(page).toHaveTitle("SCP AI Ideation assistant");
     const names = await page.request.get("/api/branding").then((r) => r.json());
     expect(Object.keys(names).sort()).toEqual(["app_name", "footer_text", "header_text"]);
   });

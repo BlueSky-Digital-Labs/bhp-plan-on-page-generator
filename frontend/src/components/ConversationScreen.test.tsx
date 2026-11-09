@@ -236,15 +236,25 @@ describe("canvas draft", () => {
     expect(box).toHaveFocus();
   });
 
-  it("puts the canvas box below the chat and the save-your-progress card after it", async () => {
+  it("puts the save-your-progress card beside the chat (above it on a phone) and the canvas box below", async () => {
     const canvas = { fields: {}, missing_required: ["team"], ready_for_review: false };
     setup({ "GET /api/conversation": withCanvas(canvas, 1, user(), bot("complete", "Which team?")) });
     const chat = await screen.findByRole("region", { name: "Chat with the assistant" });
     const canvasBox = await screen.findByRole("heading", { name: "Your canvas so far" });
     const save = await screen.findByRole("heading", { name: "Save your progress" });
     const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(save, chat)).toBe(true);
     expect(follows(chat, canvasBox)).toBe(true);
-    expect(follows(canvasBox, save)).toBe(true);
+  });
+
+  it("keeps the save card's place while a reply is coming, without offering the downloads", async () => {
+    const canvas = { fields: {}, missing_required: ["team"], ready_for_review: false };
+    setup({
+      "GET /api/conversation": withCanvas(canvas, 1, user(), bot("pending")),
+      "GET /api/conversation/turns/22222222222222222222222222222222/stream": () => new Promise<Response>(() => {}),
+    });
+    expect(await screen.findByText(/once the assistant has replied/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Save your progress" })).not.toBeInTheDocument();
   });
 
   it("announces readiness from the server's verdict, not from anything the page works out itself", async () => {
@@ -252,9 +262,58 @@ describe("canvas draft", () => {
     setup({ "GET /api/conversation": withCanvas(ready, 2, user(), bot("complete", "All done")) });
     expect(await screen.findByTestId("canvas-progress")).toHaveTextContent("Ready for review");
   });
+
+  it("offers 'Generate canvas' in the chat under the assistant's closing message, with the answer box still there", async () => {
+    const ready = { fields: { team: "Ops" }, missing_required: [], ready_for_review: true };
+    setup({ "GET /api/conversation": withCanvas(ready, 2, user(), bot("complete", "That's everything I need.")) });
+    const chat = await screen.findByRole("region", { name: "Chat with the assistant" });
+    const button = await within(chat).findByRole("button", { name: "Generate canvas" });
+    expect(within(chat).getByLabelText("Your answer")).toBeInTheDocument();
+    expect(within(chat).getByRole("button", { name: "Send" })).toBeInTheDocument();
+    const message = within(chat).getByText("That's everything I need.");
+    expect(Boolean(message.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it("cannot be reopened once the canvas is confirmed: it goes to the review page", async () => {
+    const ready = { fields: { team: "Ops" }, missing_required: [], ready_for_review: true };
+    setup({
+      "GET /api/conversation": () =>
+        json({ revision: 2, turns: [user(), bot("complete", "Done")], canvas: ready, confirmed_revision: 2 }),
+    });
+    await waitFor(() => expect(window.location.pathname).toBe("/review"));
+  });
+
+  it("does not offer it while the canvas is unfinished", async () => {
+    const canvas = { fields: {}, missing_required: ["team"], ready_for_review: false };
+    setup({ "GET /api/conversation": withCanvas(canvas, 1, user(), bot("complete", "Which team?")) });
+    await screen.findByRole("heading", { name: "Your canvas so far" });
+    expect(screen.queryByRole("button", { name: "Generate canvas" })).not.toBeInTheDocument();
+  });
 });
 
 describe("submitting and streaming", () => {
+  it("sends on Enter only when there is text; Shift+Enter makes a new line", async () => {
+    const { calls } = setup({
+      "GET /api/conversation": [convo(0), convo(1, user(), bot("complete", "Hello."))],
+      "POST /api/conversation/turns": created(),
+    });
+    const box = await screen.findByLabelText(/Describe your idea/);
+    const posts = () => calls.filter((c) => c.key === "POST /api/conversation/turns").length;
+
+    await userEvent.type(box, "{Enter}"); // nothing typed: no send, no stray new line
+    await userEvent.type(box, "   {Enter}"); // only spaces: no send
+    expect(posts()).toBe(0);
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "My idea{Shift>}{Enter}{/Shift}more");
+    expect(box).toHaveValue("My idea\nmore");
+    expect(posts()).toBe(0);
+
+    await userEvent.type(box, "{Enter}");
+    await waitFor(() => expect(posts()).toBe(1));
+    expect(calls.find((c) => c.key === "POST /api/conversation/turns")?.init?.body).toContain("My idea\\nmore");
+  });
+
   it("sends the id, expected revision and text, then shows progress separately from stored history", async () => {
     const stream = controlledStream();
     const { calls } = setup({

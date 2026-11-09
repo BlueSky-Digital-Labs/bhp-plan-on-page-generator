@@ -4,10 +4,13 @@ Turns what a user says into canvas fields and asks for what is missing, **one qu
 turn**. Code: `backend/app/interview/`. It plugs into the conversation stream
 ([conversation.md](conversation.md)) and adds no new endpoint: `GET /api/conversation` now also
 returns the draft as `canvas: {fields, missing_required, ready_for_review}` and the interview's
-position as `progression` (below). The conversation screen is one centred column: only the chat
-box at the start; once the first answer is in, **Your canvas so far** (a progress bar and a small,
-keyboard-scrollable box of the fields) appears below the chat, and while the canvas is unfinished the
-**Save your progress** card ([downloads.md](downloads.md)) sits beside it (below it on a phone).
+position as `progression` (below). The conversation screen starts as one centred chat box. Once the first answer is in, the page
+widens: the **Save your progress** card ([downloads.md](downloads.md)) sits beside the chat (above it on
+a phone) while the canvas is unfinished, and **Your canvas so far** (a progress bar and a small,
+keyboard-scrollable box of the fields) appears below the chat. While a reply is coming, the card's
+place stays and says saving is available once the assistant has replied.
+When the server says the canvas is ready and the assistant has sent its closing message, a
+**Generate canvas** button appears in the chat under that message; the answer box stays.
 
 ## How a turn works
 
@@ -66,6 +69,18 @@ or asked again because the answer was unclear) and the assistant has finished re
 priority follow-up ("why that priority?") and a choice between an earlier and a new value are
 typed. The browser has no copy of the lists: it shows whatever the server sends.
 
+### Changing something after "That's everything I need"
+
+The user can keep talking until they confirm the canvas on the review page. A different value for an
+answered field is asked about first (the contradiction rule below), then applied when they choose it.
+The priority can be changed too, but only when the user's own words say "priority" and name the new
+one. A message that cannot be read as a change gets a fixed reply saying how to ask for one (“Change
+the team to Operations”), not the closing line again. Opportunity types can be added to, not removed.
+
+Once the user confirms the canvas ("Yes, this is correct"), it is **final**: the server refuses
+further answers (`409 canvas_confirmed`), the review page has no way back to the conversation, and
+`/conversation` goes straight back to the review page. Before confirming, nothing is final.
+
 ## Rules the engine enforces (each has a test)
 
 * Only the 16 canvas ids (same as `frontend/src/canvas/fields.ts`); only the six opportunity
@@ -108,7 +123,7 @@ typed. The browser has no copy of the lists: it shows whatever the server sends.
   anything already there). Skipping it never blocks anything, and an answered Business Impact is
   not asked again later.
 
-## Prompts and questions (version `2026-11-05.1`)
+## Prompts and questions (version `2026-11-09.1`)
 
 `prompts.py` holds the extractor prompt, an ask, a follow-up and a how-to-answer hint for every field,
 the priority follow-up, the dedicated confirmations and the acknowledgements. Representative examples:

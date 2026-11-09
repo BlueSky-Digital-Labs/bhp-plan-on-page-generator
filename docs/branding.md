@@ -8,8 +8,8 @@ secret) before it draws, so a new name needs a **restart, not a rebuild**.
 
 | Variable | Shown in | Default |
 | --- | --- | --- |
-| `APP_NAME` | the main heading on the sign-in page, the browser tab, the appendix title, the email subject and body | `Plan on a Page` |
-| `HEADER_TEXT` | the header, next to the BHP logo | `Plan on a Page` |
+| `APP_NAME` | the main heading on the sign-in page, the browser tab, the appendix title, the email subject and body | `SCP AI Ideation assistant` |
+| `HEADER_TEXT` | the header, next to the BHP logo | `SCP AI Ideation assistant` |
 | `FOOTER_TEXT` | the footer | `BHP` |
 
 For the Integrated Operations name, for example:

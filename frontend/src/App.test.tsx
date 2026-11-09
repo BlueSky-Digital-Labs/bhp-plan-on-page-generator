@@ -48,9 +48,9 @@ describe("configured names", () => {
   it("uses the default names if they cannot be read, and the app still works", async () => {
     mockApi({ "GET /api/branding": () => envelope("service_unavailable", 503), "GET /api/access-state": NOT_PERMITTED });
     render(<App />);
-    expect(await screen.findByRole("heading", { level: 1, name: "Plan on a Page" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "SCP AI Ideation assistant" })).toBeInTheDocument();
     expect(screen.getByLabelText("Access code")).toBeInTheDocument();
-    expect(document.title).toBe("Plan on a Page");
+    expect(document.title).toBe("SCP AI Ideation assistant");
   });
 
   it("shows a configured name as plain text, never as markup", async () => {
@@ -309,6 +309,13 @@ describe("review route (read-back, confirmation and downloads)", () => {
     await open({ "GET /api/conversation": review(4, 3) }); // answered again since confirming
     expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument();
     expect(menus()).toHaveLength(0);
+  });
+
+  it("offers no way back to the conversation once the canvas is confirmed", async () => {
+    await open({ "GET /api/conversation": review(3, 3) });
+    expect(screen.queryByRole("button", { name: /Back to the conversation/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /go back and correct it/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("final and cannot be changed");
   });
 
   it("lets the user go back to correct something through the conversation", async () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   type Conversation,
   type Phase,
@@ -38,6 +38,7 @@ const SUBMIT_MESSAGES: Record<string, string> = {
     "Your conversation has changed since you opened it, perhaps in another tab. Reload to see the latest, then send your answer again.",
   turn_in_progress: "The assistant has not finished replying to your last answer. Get that reply first.",
   conversation_full: "This conversation has reached its limit.",
+  canvas_confirmed: "You confirmed this canvas, so it can no longer be changed.",
 };
 const UNSURE_SAVED =
   "We could not confirm that your answer was saved. Try sending it again: it will not be added twice.";
@@ -249,9 +250,23 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
     }
   }
 
+  // A confirmed canvas is final: the conversation cannot be reopened (browser Back, or a typed address).
+  const confirmedFinal = history !== null && history.confirmed_revision != null && history.confirmed_revision === history.revision;
+  useEffect(() => {
+    if (confirmedFinal) navigate(ROUTES.review, { replace: true });
+  }, [confirmedFinal]);
+
   // A new question starts with its choices again, whichever way the last one was answered.
   const questionKey = history?.progression?.outstanding_question?.text ?? "";
   useEffect(() => setTypeOwn(false), [questionKey]);
+
+  // Enter sends, but only when there is something to send; Shift+Enter starts a new line. Nothing
+  // happens while an input method is composing text (e.g. choosing a character).
+  function onAnswerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    if (composed.trim() && !blocked) void send();
+  }
 
   async function attach(file: File | undefined) {
     if (!file) return;
@@ -318,6 +333,8 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
     !blocked &&
     history?.canvas?.ready_for_review !== true &&
     turns.some((t) => t.role === "user" && t.status === "complete");
+  // The card's column stays put while a reply is coming, so the chat does not jump about.
+  const showAside = !firstAnswer && history?.canvas?.ready_for_review !== true;
   const submitMessage = submitError ? (SUBMIT_MESSAGES[submitError.code] ?? UNSURE_SAVED) : null;
   // A question with a fixed list of answers is picked from, not typed, once the assistant has asked it
   // and nothing else is under way. The server names the list; typing instead is one click away.
@@ -333,9 +350,17 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
       ? outstanding.choices
       : null;
 
+  // Once the server says every answer is in and the assistant has said so, the way forward sits in the
+  // chat under that message. The answer box stays, in case there is more to add.
+  const readyToGenerate =
+    !blocked &&
+    history?.canvas?.ready_for_review === true &&
+    lastTurn?.role === "assistant" &&
+    lastTurn.status === "complete";
+
   return (
-    <div className="conversation">
-      <div className="conversation-main">
+    <div className={firstAnswer ? "conversation conversation--start" : "conversation"}>
+      <div className="conversation-head">
         <h1>Describe your idea</h1>
         {firstAnswer && (
           <p>
@@ -343,7 +368,25 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
             template first.
           </p>
         )}
+      </div>
 
+      {/* The chat, with the save-and-stop card beside it (above it on a phone) once an answer is in. */}
+      <div className={showAside ? "conversation-top conversation-top--aside" : "conversation-top"}>
+        {showAside && (
+          <aside className="conversation-aside" aria-label="Save and stop">
+            {saveVisible && history ? (
+              <SaveProgress
+                revision={history.revision}
+                onStopped={() => navigate(ROUTES.entry, { replace: true, notice: "session_stopped" })}
+                onAccessLost={onAccessLost}
+                onOutOfDate={() => void refresh()}
+              />
+            ) : (
+              <p className="conversation-aside__wait">You can save and stop here once the assistant has replied.</p>
+            )}
+          </aside>
+        )}
+        <div className="conversation-main">
         <section className="chat" aria-label="Chat with the assistant">
           <header className="chat__header">
             <span className="chat__pill">
@@ -431,7 +474,8 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
                 <div className="actions">
                   {submitError.code !== "revision_conflict" &&
                     submitError.code !== "turn_in_progress" &&
-                    submitError.code !== "conversation_full" && (
+                    submitError.code !== "conversation_full" &&
+                    submitError.code !== "canvas_confirmed" && (
                       <button type="button" onClick={() => void send()}>
                         Try sending again
                       </button>
@@ -469,6 +513,14 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
               <p role="alert" className="notice">
                 {attachError}
               </p>
+            )}
+            {readyToGenerate && (
+              <div className="generate-offer">
+                <button type="button" onClick={() => navigate(ROUTES.review)}>
+                  Generate canvas
+                </button>
+                <p className="field__help">Or add anything else below first.</p>
+              </div>
             )}
             {choices ? (
               <ChoiceAnswer
@@ -511,6 +563,7 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
                   maxLength={MAX_ANSWER_CHARS}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={onAnswerKey}
                   placeholder={firstAnswer ? "Describe your idea…" : "Type your answer…"}
                   aria-describedby="answer-help"
                 />
@@ -519,7 +572,7 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
                 </button>
               </form>
               <p id="answer-help" className="field__help">
-                Up to {MAX_ANSWER_CHARS} characters. You can also attach one PDF, Word, PowerPoint or JSON file
+                Press Enter to send, or Shift+Enter for a new line. Up to {MAX_ANSWER_CHARS} characters. You can also attach one PDF, Word, PowerPoint or JSON file
                 (up to {MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB): its text is sent with your answer, as if you had typed
                 it. Do not include passwords or personal details.
               </p>
@@ -527,20 +580,12 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
             )}
           </div>
         </section>
+        </div>
       </div>
-      {/* Nothing but the chat until the conversation starts. Then the canvas so far, and (while it is
-          unfinished) the way to save it and stop, appear below it. */}
+      {/* Nothing but the chat until the conversation starts. Then the canvas so far appears below it. */}
       {!firstAnswer && (
-        <div className={saveVisible && history ? "conversation-extras conversation-extras--two" : "conversation-extras"}>
-          <CanvasPanel canvas={history?.canvas} onGenerate={() => navigate(ROUTES.review)} />
-          {saveVisible && history && (
-            <SaveProgress
-              revision={history.revision}
-              onStopped={() => navigate(ROUTES.entry, { replace: true, notice: "session_stopped" })}
-              onAccessLost={onAccessLost}
-              onOutOfDate={() => void refresh()}
-            />
-          )}
+        <div className="conversation-extras">
+          <CanvasPanel canvas={history?.canvas} />
         </div>
       )}
     </div>

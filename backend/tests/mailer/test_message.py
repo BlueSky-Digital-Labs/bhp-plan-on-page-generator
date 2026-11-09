@@ -101,7 +101,7 @@ def test_the_email_says_the_configured_text_and_names_the_solution_in_the_subjec
     out = compose(
         ("a@example.com",), "Shift Notes Assistant", "Submitted for review.", (PDF, APPENDIX)
     )
-    assert out.subject == "Plan on a Page: Shift Notes Assistant"
+    assert out.subject == "SCP AI Ideation assistant: Shift Notes Assistant"
     assert out.body == "Submitted for review.\n"
     assert out.attachments == (PDF, APPENDIX)
 
@@ -136,7 +136,7 @@ def test_a_solution_name_cannot_break_the_headers(name):
 
 
 def test_a_missing_name_still_gives_a_sensible_subject():
-    assert compose(("a@example.com",), "  ", "", (PDF,)).subject == "Plan on a Page"
+    assert compose(("a@example.com",), "  ", "", (PDF,)).subject == "SCP AI Ideation assistant"
 
 
 def test_single_line_flattens_and_bounds_text():
@@ -167,7 +167,7 @@ def test_the_message_has_the_configured_sender_the_recipients_and_both_pdfs():
 def test_non_ascii_text_is_carried_in_the_body_and_subject():
     out = compose(("a@example.com",), "Café ☕ plan", "Voilà — “quotes”", (PDF,))
     message = parse(to_mime("noreply@example.com", out))
-    assert message["Subject"] == "Plan on a Page: Café ☕ plan"
+    assert message["Subject"] == "SCP AI Ideation assistant: Café ☕ plan"
     assert "Voilà — “quotes”" in message.get_body(("plain",)).get_content()
 
 

@@ -370,7 +370,7 @@ def test_web_task_definition(test_env):
     assert env["ACCESS_CODE_HASH_SECRET_ID"] == "plan-test/access-code-hash"
     assert env["COOKIE_SIGNING_KEY_SECRET_ID"] == "plan-test/cookie-signing-key"
     assert "SESSIONS_TABLE_NAME" in env
-    assert env["APP_NAME"] == "Plan on a Page" and env["FOOTER_TEXT"] == "BHP"
+    assert env["APP_NAME"] == "SCP AI Ideation assistant" and env["FOOTER_TEXT"] == "BHP"
     assert env["EMAIL_DELIVERY"] == "unavailable"
     assert "SES_REGION" not in env and "EMAIL_SENDER_ADDRESS" not in env
     # No approved model yet: the safe producer, no Bedrock settings.

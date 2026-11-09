@@ -111,7 +111,7 @@ def compose(
     solution_name: str,
     body: str,
     attachments: tuple[Attachment, ...],
-    app_name: str = "Plan on a Page",
+    app_name: str = "SCP AI Ideation assistant",
 ) -> OutgoingEmail:
     """The submission email for a confirmed canvas: a fixed subject naming the solution, the
     configured text as the whole body, and the attachments. Nothing the user typed is in it."""

@@ -18,7 +18,7 @@ from app.mailer import (
 
 EMAIL = OutgoingEmail(
     ("a@example.com", "b@example.org"),
-    "Plan on a Page: Idea",
+    "SCP AI Ideation assistant: Idea",
     "Body text\n",
     (Attachment("idea-canvas-r3.pdf", b"%PDF-canvas", "application/pdf"),),
 )
@@ -50,7 +50,9 @@ def test_the_request_sent_to_ses_is_exactly_what_was_composed(client):
     assert seen["Destination"] == {"ToAddresses": ["a@example.com", "b@example.org"]}
     assert seen["ConfigurationSetName"] == "reports"
     raw = email.message_from_bytes(seen["Content"]["Raw"]["Data"], policy=policy.default)
-    assert raw["From"] == "noreply@example.com" and raw["Subject"] == "Plan on a Page: Idea"
+    assert (
+        raw["From"] == "noreply@example.com" and raw["Subject"] == "SCP AI Ideation assistant: Idea"
+    )
     assert [p.get_filename() for p in raw.iter_attachments()] == ["idea-canvas-r3.pdf"]
 
 

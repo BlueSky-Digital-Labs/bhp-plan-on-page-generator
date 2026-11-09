@@ -400,7 +400,7 @@ SNS, CloudWatch alarm, Budgets, autoscaling and Route 53 permissions are **full-
    | `BEDROCK_RESOURCE_ARNS` | with a model | comma-separated ARNs from step 4 |
    | `ALARM_EMAIL` | prod | alarm and budget recipient. In minimal, alarms and budget exist only if set |
    | `MONTHLY_BUDGET_USD` | no | default 450 |
-   | `APP_NAME`, `HEADER_TEXT`, `FOOTER_TEXT` | no | defaults `Plan on a Page`, `Plan on a Page`, `BHP` ([branding.md](branding.md)) |
+   | `APP_NAME`, `HEADER_TEXT`, `FOOTER_TEXT` | no | defaults `SCP AI Ideation assistant`, `SCP AI Ideation assistant`, `BHP` ([branding.md](branding.md)) |
    | `WEB_DESIRED_COUNT` | no | default 2 (minimal: 1); 1 to 10. Full autoscales up to max(4, this); minimal does not |
    | `ENABLE_EMAIL`, `SES_IDENTITY_ARN`, `EMAIL_SENDER_ADDRESS`, `EMAIL_ALLOWED_DOMAINS` | no | leave off, see open decisions |
    | `BEDROCK_REGION`, `SES_REGION`, `RATE_LIMIT_SENSITIVE`, `RATE_LIMIT_GENERAL` | no | rarely needed |

@@ -9,8 +9,8 @@ export interface Branding {
 }
 
 export const DEFAULT_BRANDING: Branding = {
-  appName: "Plan on a Page",
-  headerText: "Plan on a Page",
+  appName: "SCP AI Ideation assistant",
+  headerText: "SCP AI Ideation assistant",
   footerText: "BHP",
 };
 

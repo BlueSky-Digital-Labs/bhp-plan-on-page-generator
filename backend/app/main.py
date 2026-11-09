@@ -162,7 +162,7 @@ def create_app(
     configure_logging(settings.log_level)
 
     app = FastAPI(
-        title="Plan on a Page",
+        title="SCP AI Ideation assistant",
         # Interactive docs and the schema are for local work only.
         docs_url=None if settings.is_deployed else "/api/docs",
         redoc_url=None,

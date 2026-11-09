@@ -29,7 +29,7 @@ class Turn:
 
 @dataclass(frozen=True)
 class SubmitResult:
-    outcome: Literal["created", "replayed", "revision_conflict", "unfinished", "full"]
+    outcome: Literal["created", "replayed", "revision_conflict", "unfinished", "full", "confirmed"]
     revision: int
     user_turn: Turn | None = None
     assistant_turn: Turn | None = None

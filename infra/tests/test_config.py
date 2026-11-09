@@ -21,8 +21,8 @@ def test_defaults():
     assert cfg.monthly_budget_usd == 450
     assert cfg.rate_limit_sensitive == 100
     assert (cfg.app_name, cfg.header_text, cfg.footer_text) == (
-        "Plan on a Page",
-        "Plan on a Page",
+        "SCP AI Ideation assistant",
+        "SCP AI Ideation assistant",
         "BHP",
     )
     assert cfg.enable_email is False
@@ -32,7 +32,7 @@ def test_defaults():
 def test_empty_values_count_as_unset():
     cfg = load(domain_name="", hosted_zone_id="", alarm_email="", app_name="", web_desired_count="")
     assert cfg.domain_name is None and cfg.alarm_email is None
-    assert cfg.app_name == "Plan on a Page" and cfg.web_desired_count == 2
+    assert cfg.app_name == "SCP AI Ideation assistant" and cfg.web_desired_count == 2
 
 
 def test_model_selects_the_bedrock_producer():

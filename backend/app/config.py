@@ -63,8 +63,10 @@ class Settings(BaseSettings):
 
     # What the app calls itself on screen, in the browser tab, and in the appendix and the email.
     # Read at startup and served to the page, so changing them needs a restart, not a rebuild.
-    app_name: str = Field(default="Plan on a Page", validate_default=True)
-    header_text: str = Field(default="Plan on a Page", validate_default=True)  # beside the logo
+    app_name: str = Field(default="SCP AI Ideation assistant", validate_default=True)
+    header_text: str = Field(
+        default="SCP AI Ideation assistant", validate_default=True
+    )  # beside the logo
     footer_text: str = Field(default="BHP", validate_default=True)
 
     # Emailing the canvas and appendix. "unavailable" sends nothing; "ses" uses Amazon SES from the

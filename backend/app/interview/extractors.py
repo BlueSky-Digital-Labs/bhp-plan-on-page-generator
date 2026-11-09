@@ -71,7 +71,11 @@ class BedrockExtractor:
 
     def extract(self, inp: ExtractionInput) -> Extraction:
         target = (
-            "none yet (this is the opening description)"
+            (
+                "none (the canvas is complete; the user is correcting or adding to it)"
+                if inp.canvas
+                else "none yet (this is the opening description)"
+            )
             if inp.target is None
             else f"{inp.target.kind}: {LABELS.get(inp.target.field, inp.target.field)}"
         )

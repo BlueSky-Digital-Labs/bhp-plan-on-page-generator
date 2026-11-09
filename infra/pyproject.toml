@@ -1,7 +1,7 @@
 [project]
 name = "plan-on-a-page-infra"
 version = "0.0.0"
-description = "AWS CDK app for the Plan on a Page deployment"
+description = "AWS CDK app for the SCP AI Ideation assistant deployment"
 requires-python = ">=3.13"
 dependencies = [
     "aws-cdk-lib>=2.200,<3",

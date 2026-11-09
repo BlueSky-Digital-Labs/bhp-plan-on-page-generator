@@ -2,7 +2,9 @@
 
 import io
 import json
+import uuid
 import zipfile
+from datetime import timedelta
 
 import pytest
 from pypdf import PdfReader
@@ -23,6 +25,22 @@ def finish(client):
             return data
         reply, data = say(client, answer_for(reply))
     raise AssertionError("did not finish")
+
+
+def amend_behind_the_lock(world, client, text="One more detail."):
+    """An answer that reaches the store anyway (a late write from another tab): the API itself refuses
+    answers once the canvas is confirmed, but everything downstream must still cope with a changed
+    revision."""
+    revision = history(client)["revision"]
+    session_id = next(iter(world.store.sessions))
+    world.conversation._store.submit(
+        session_id,
+        uuid.uuid4().hex,
+        text,
+        revision,
+        world.clock() + timedelta(hours=1),
+        world.clock(),
+    )
 
 
 def appendix(client, fmt, revision=None):
@@ -151,7 +169,7 @@ def test_the_pdf_carries_the_same_record(world):
 def test_a_new_answer_takes_the_canvas_out_of_ready_so_the_next_download_is_a_draft(world):
     wire(world)
     client = browser(world)
-    finish_confirmed(client)
+    finish(client)
     assert appendix(client, "json").json()["draft"] is False
     say(
         client, "Actually, it also needs to cover night shifts."

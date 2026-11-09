@@ -59,8 +59,8 @@ bedrock_log_error_text    service        false                    Log the short 
                                                                   validation errors. Test only: it
                                                                   can quote request content.
 bedrock_region            service        region                   Must equal region.
-app_name                  service        Plan on a Page           On-screen name, 1 to 80 chars.
-header_text               service        Plan on a Page           Text beside the logo.
+app_name                  service        SCP AI Ideation assistant           On-screen name, 1 to 80 chars.
+header_text               service        SCP AI Ideation assistant           Text beside the logo.
 footer_text               service        BHP                      Footer text.
 alarm_email               service        none (prod: required)    Alarm and budget recipient.
                                                                   Minimal: alarms, topic and budget
@@ -374,8 +374,8 @@ class Config:
             bedrock_role_arn=bedrock_role_arn,
             bedrock_log_error_text=_bool(get, "bedrock_log_error_text"),
             bedrock_region=bedrock_region,
-            app_name=_branding(get, "app_name", "Plan on a Page"),
-            header_text=_branding(get, "header_text", "Plan on a Page"),
+            app_name=_branding(get, "app_name", "SCP AI Ideation assistant"),
+            header_text=_branding(get, "header_text", "SCP AI Ideation assistant"),
             footer_text=_branding(get, "footer_text", "BHP"),
             alarm_email=alarm_email,
             monthly_budget_usd=_int(get, "monthly_budget_usd", 450, 1, 1_000_000),

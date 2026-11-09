@@ -11,7 +11,7 @@ from tests.access.conftest import csrf
 from tests.appendix.test_appendix_api import appendix, confirm, finish, finish_confirmed
 from tests.appendix.test_canvas_pptx import canvas_file
 from tests.interview.conftest import OPENING, browser
-from tests.interview.test_interview_api import answer_for, history, say, submit, wire
+from tests.interview.test_interview_api import history, say, submit, wire
 
 pytestmark = pytest.mark.usefixtures("store_kind")  # every test: in-memory, then DynamoDB (moto)
 
@@ -177,41 +177,35 @@ def test_the_canvas_pdf_is_a_pdf_with_the_confirmed_answers(world):
     assert data["canvas"]["fields"]["solutionName"] in text
 
 
-def test_a_later_answer_ends_the_confirmation_at_once_and_a_new_one_is_needed(world):
+def test_a_confirmed_canvas_is_final_and_takes_no_more_answers(world):
     wire(world)
     client = browser(world)
     data = finish_confirmed(client)
     assert canvas_file(client, "pdf").status_code == 200
 
-    submit(
+    response = submit(
         client,
         "Actually, it should also cover night shifts.",
         data["revision"],
         submission_id=uuid.uuid4().hex,
     )
+    assert response.status_code == 409 and response.json()["error"]["code"] == "canvas_confirmed"
     now = history(client)
-    assert (
-        now["confirmed_revision"] == data["revision"] != now["revision"]
-    )  # no longer the current one
+    assert now["revision"] == data["revision"] == now["confirmed_revision"]  # nothing changed
+    assert len(now["turns"]) == len(data["turns"])
     for _, get in DOCUMENTS:
-        assert get(client).status_code == 409  # refused while the reply is pending and after
+        assert get(client).status_code == 200  # still served
 
-    # Finish the interview again; the user must read it back and confirm the new revision.
-    turn_id = now["turns"][-1]["turn_id"]
-    client.get(f"/api/conversation/turns/{turn_id}/stream")
-    latest = history(client)
-    reply = latest["turns"][-1]["text"]
-    for _ in range(40):
-        if latest["canvas"]["ready_for_review"]:
-            break
-        answer = "Use the new one." if "Which one should I use" in reply else answer_for(reply)
-        reply, latest = say(client, answer)  # the amendment contradicted an earlier answer
-    assert (
-        latest["confirmed_revision"] != latest["revision"]
-    )  # the old confirmation did not carry over
-    assert canvas_file(client, "pdf").status_code == 200  # saving needs none; emailing still does
-    assert confirm(client).status_code == 200
-    assert canvas_file(client, "pdf").status_code == 200
+
+def test_an_answer_before_confirming_means_the_old_revision_cannot_be_confirmed(world):
+    wire(world)
+    client = browser(world)
+    data = finish(client)
+    say(client, "Actually, it should also cover night shifts.")  # not confirmed yet: allowed
+    assert history(client)["revision"] != data["revision"]
+    # refused: the revision that was read is stale, and the canvas is no longer complete
+    assert confirm(client, data["revision"]).status_code in (409, 422)
+    assert history(client)["confirmed_revision"] is None
 
 
 def test_an_answer_that_arrives_while_the_file_is_being_built_stops_it_being_sent(

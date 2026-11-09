@@ -588,3 +588,60 @@ def test_the_old_priority_words_are_no_longer_accepted(old):
     convo.state = state
     convo.say(old)
     assert "priority" not in convo.state.canvas
+
+
+# --- coming back to a finished canvas to change something ---------------------------------------
+
+
+def _finished() -> Conversation:
+    convo = Conversation()
+    answer_everything(convo)
+    assert is_ready(convo.state)
+    return convo
+
+
+def _next_says(convo: Conversation, *updates_by_turn: list) -> None:
+    """The model's next replies, filed under the ids the next user turns will have."""
+    first = len(convo.user_ids) + 1
+    convo.interviewer = type(convo.interviewer)(
+        FakeExtractor(
+            *(
+                Extraction([update(f, v, f"u{first + n}") for f, v in found])
+                for n, found in enumerate(updates_by_turn)
+            )
+        )
+    )
+
+
+def test_a_different_value_after_ready_asks_which_to_keep_instead_of_repeating_the_closing_line():
+    convo = _finished()
+    old_team = convo.state.canvas["team"]
+    _next_says(convo, [("team", "Finance")])
+    convo.say("Change the team to Finance.")
+    reply = convo.replies[-1]
+    assert reply != READY_TEXT and "Finance" in reply and old_team in reply
+    assert convo.state.conflicts == {"team": "Finance"} and not is_ready(convo.state)
+
+    convo.say("Use the new one.")
+    assert convo.state.canvas["team"] == "Finance" and is_ready(convo.state)
+    assert convo.replies[-1] == READY_TEXT
+
+
+def test_a_change_that_cannot_be_read_says_how_to_ask_for_one_after_ready():
+    convo = _finished()
+    _next_says(convo, [])
+    convo.say("Can you fix the thing about the users?")
+    reply = convo.replies[-1]
+    assert reply != READY_TEXT and "Change the team to Operations" in reply
+    assert is_ready(convo.state)  # nothing was changed
+
+
+def test_the_priority_can_be_changed_after_ready_only_in_the_users_own_words():
+    convo = _finished()
+    _next_says(convo, [("priority", "Exploratory")], [("priority", "Nice-to-have")])
+    convo.say("Make it exploratory.")  # no mention of "priority": not accepted
+    assert convo.state.canvas["priority"] == "Must-have" and is_ready(convo.state)
+    convo.say("Change the priority to nice to have.")
+    assert convo.state.conflicts == {"priority": "Nice-to-have"}
+    convo.say("Use the new one.")
+    assert convo.state.canvas["priority"] == "Nice-to-have" and is_ready(convo.state)

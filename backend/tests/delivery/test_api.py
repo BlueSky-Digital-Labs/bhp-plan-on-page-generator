@@ -12,7 +12,7 @@ import pytest
 
 from app.access.errors import DependencyUnavailable
 from tests.access.conftest import csrf
-from tests.appendix.test_appendix_api import appendix, finish_confirmed
+from tests.appendix.test_appendix_api import amend_behind_the_lock, appendix, finish_confirmed
 from tests.appendix.test_canvas_pptx import canvas_file
 from tests.interview.conftest import OPENING, browser
 from tests.interview.test_interview_api import answer_for, history, say, wire
@@ -180,7 +180,7 @@ def test_an_amendment_resets_both_documents(world):
     client = ready_client(world)
     both_downloaded(client)
     assert status(client).json()["purge_eligible"]
-    say(client, "One more detail.")  # a new revision
+    amend_behind_the_lock(world, client)  # a new revision
     got = status(client).json()
     assert not got["canvas_downloaded"] and not got["appendix_downloaded"]
     assert not got["purge_eligible"] and got["revision"] == history(client)["revision"]
@@ -189,7 +189,9 @@ def test_an_amendment_resets_both_documents(world):
 def test_a_download_that_finishes_after_an_amendment_unlocks_nothing(world):
     client = ready_client(world)
     old = history(client)["revision"]
-    say(client, "Another answer arrives while the old file is still being sent.")
+    amend_behind_the_lock(
+        world, client, "Another answer arrives while the old file is still being sent."
+    )
     service, session = world.conversation, session_of(world)
     assert service.record_delivery(session, "canvas", old) is False  # the late completion
     assert service.record_delivery(session, "appendix", old) is False

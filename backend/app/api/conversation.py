@@ -43,6 +43,7 @@ _CONFLICTS = {
     ),
     "unfinished": "The assistant has not finished replying to your last answer.",
     "full": "This conversation has reached its limit.",
+    "confirmed": "You confirmed this canvas, so it can no longer be changed.",
 }
 
 
@@ -63,9 +64,11 @@ def submit_turn(
 ) -> dict:
     result = service.submit(session, body.submission_id, body.text, body.expected_revision)
     if result.outcome in _CONFLICTS:
-        code = {"unfinished": "turn_in_progress", "full": "conversation_full"}.get(
-            result.outcome, result.outcome
-        )
+        code = {
+            "unfinished": "turn_in_progress",
+            "full": "conversation_full",
+            "confirmed": "canvas_confirmed",
+        }.get(result.outcome, result.outcome)
         raise ApiProblem(409, code, _CONFLICTS[result.outcome])
     if result.outcome == "replayed":
         response.status_code = 200  # already recorded: report it, create nothing new

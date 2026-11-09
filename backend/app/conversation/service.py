@@ -110,6 +110,11 @@ class ConversationService:
     def submit(
         self, session: Session, submission_id: str, text: str, expected_revision: int
     ) -> SubmitResult:
+        # Once the user has confirmed the canvas as read back, it is final: no further answers.
+        if self._interview is not None:
+            confirmed = self._interview.confirmed_revision(session.session_id)
+            if confirmed is not None and confirmed == self._store.history(session.session_id)[0]:
+                return SubmitResult("confirmed", confirmed)
         return self._store.submit(
             session.session_id,
             submission_id,

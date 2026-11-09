@@ -1,6 +1,6 @@
-# Plan on a Page
+# SCP AI Ideation assistant
 
-Browser application for roughly 50 WAIO ROC users to complete the Plan on a Page journey
+Browser application for roughly 50 WAIO ROC users to complete the SCP AI Ideation assistant journey
 (Edge and Chrome). This repo is the application foundation: a React + TypeScript + Vite
 frontend and a FastAPI backend, packaged as one container for AWS ECS Fargate (Sydney).
 Feature work builds on the [React/JSON contract](docs/frontend-contract.md). Entry and

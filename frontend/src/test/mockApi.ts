@@ -34,7 +34,7 @@ export function mockApi(routes: Record<string, Handler | Handler[]>) {
   return { fn, calls };
 }
 
-export const DEFAULT_BRANDING_BODY = { app_name: "Plan on a Page", header_text: "Plan on a Page", footer_text: "BHP" };
+export const DEFAULT_BRANDING_BODY = { app_name: "SCP AI Ideation assistant", header_text: "SCP AI Ideation assistant", footer_text: "BHP" };
 
 export const csrfRoute = () => json({ csrf_token: "test-csrf-token" });
 

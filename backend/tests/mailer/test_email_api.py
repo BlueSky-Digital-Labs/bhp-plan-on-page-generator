@@ -14,7 +14,12 @@ from app.mailer.limits import SendLimiter
 from app.mailer.service import MailService
 from app.mailer.settings import NoSubmitSettings, StaticSubmitSettings
 from tests.access.conftest import csrf
-from tests.appendix.test_appendix_api import confirm, finish, finish_confirmed
+from tests.appendix.test_appendix_api import (
+    amend_behind_the_lock,
+    confirm,
+    finish,
+    finish_confirmed,
+)
 from tests.interview.conftest import OPENING, browser
 from tests.interview.test_interview_api import history, say, wire
 
@@ -84,7 +89,7 @@ def test_both_documents_are_built_as_pdfs_and_sent_to_the_one_configured_recipie
         a.content.startswith(b"%PDF") and a.media_type == "application/pdf" for a in out.attachments
     )
     assert out.attachments[0].content != out.attachments[1].content
-    assert out.subject.startswith("Plan on a Page: ")
+    assert out.subject.startswith("SCP AI Ideation assistant: ")
 
 
 def test_the_text_and_recipient_are_whatever_the_settings_say_right_now(world):
@@ -189,7 +194,7 @@ def test_only_the_current_revision_can_be_sent(world):
 
 def test_an_answer_after_confirming_means_the_old_confirmation_does_not_send(world):
     client, mailer = ready_client(world)
-    say(client, "One more detail.")
+    amend_behind_the_lock(world, client)
     response = send(client)
     assert response.status_code == 409 and not mailer.sent
 

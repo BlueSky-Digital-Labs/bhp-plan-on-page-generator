@@ -80,7 +80,7 @@ def appendix_bytes(
     session: Session,
     snapshot: ExportSnapshot,
     file_format: Format,
-    app_name: str = "Plan on a Page",
+    app_name: str = "SCP AI Ideation assistant",
 ) -> bytes:
     """The appendix file for a confirmed snapshot, with the AI overview when there is one."""
     try:
