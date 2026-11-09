@@ -109,21 +109,18 @@ button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0 1rem; }
 .field__help { color: var(--muted); font-size: 0.875rem; margin: 0.25rem 0 0; }
 
-/* The chat on its own at the start. Once the conversation begins the page widens: the save-and-stop card
-   sits beside the chat (above it on a phone) and the canvas so far appears below. */
+/* The chat on its own at the start. Once the conversation begins the page widens: the canvas checklist and
+   the save-and-stop card sit beside the chat (below it on a phone). */
 .conversation { max-width: 70rem; margin-inline: auto; }
 .conversation--start { max-width: 54rem; }
-.conversation-top { display: grid; gap: 1rem; }
-.conversation-aside { order: -1; }
+.conversation-top { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+.conversation-aside { display: grid; gap: 1rem; align-content: start; order: 1; } /* below the chat on a phone */
 .conversation-aside__wait { margin: 0; padding: 0.75rem 1rem; border: 1px dashed var(--border); border-radius: 1rem; color: var(--muted); font-size: 0.875rem; }
 @media (min-width: 56rem) {
   .conversation-top--aside { grid-template-columns: minmax(0, 1fr) 18rem; align-items: start; }
-  .conversation-aside { order: 0; grid-column: 2; grid-row: 1; position: sticky; top: 1rem; }
+  .conversation-aside { grid-column: 2; grid-row: 1; position: sticky; top: 1rem; max-height: calc(100dvh - 2rem); overflow-y: auto; }
   .conversation-top--aside .conversation-main { grid-column: 1; grid-row: 1; }
 }
-.conversation-extras { display: grid; gap: 1rem; margin-top: 1.25rem; animation: extras-in 0.28s ease-out both; }
-@keyframes extras-in { from { opacity: 0; transform: translateY(0.5rem); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .conversation-extras { animation: none; } }
 .canvas-panel h2 { margin: 0 0 0.5rem; font-size: 1.125rem; }
 .canvas-panel > p[role="status"] { margin: 0.4rem 0 0.75rem; font-size: 0.9rem; color: var(--muted); }
 .canvas-panel__bar { height: 0.4rem; border-radius: 999px; background: var(--brand-tint-2); overflow: hidden; }
@@ -141,12 +138,13 @@ button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
     #fff;
 }
 .canvas-panel__scroll:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
-.canvas-panel dl { margin: 0; }
-.canvas-panel__row { padding: 0.45rem 0; border-top: 1px solid var(--border); }
+.canvas-panel__list { list-style: none; margin: 0; padding: 0; }
+.canvas-panel__row { display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0; border-top: 1px solid var(--border); font-size: 0.875rem; }
 .canvas-panel__row:first-child { border-top: 0; }
-.canvas-panel dt { font-weight: 600; font-size: 0.8125rem; color: var(--muted); }
-.canvas-panel dd { margin: 0.125rem 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.canvas-panel__empty { color: var(--muted); font-style: italic; }
+.canvas-panel__tick { flex: none; width: 1.25rem; height: 1.25rem; border-radius: 50%; border: 2px solid #b9b1a9; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700; line-height: 1; color: #fff; }
+.canvas-panel__row--done .canvas-panel__tick { background: #0b5d3b; border-color: #0b5d3b; }
+.canvas-panel__label { color: var(--muted); overflow-wrap: anywhere; }
+.canvas-panel__row--done .canvas-panel__label { color: var(--fg); font-weight: 600; }
 .canvas-panel__optional { font-weight: 400; color: var(--muted); }
 
 /* Entry page: the title and access card sit in the middle of the space between header and footer. */
@@ -291,8 +289,6 @@ body:has(.entry) { background: radial-gradient(60rem 28rem at 50% 3rem, var(--br
 .dl__locked { background: #fff6e5; color: #5c3b00; border-left: 4px solid #b26a00; padding: 0.6rem 0.9rem; border-radius: 0.5rem; }
 .dl__help { color: var(--muted); font-size: 0.875rem; }
 .dl__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.dl__confirm { margin-top: 0.75rem; padding: 0.75rem 0.9rem; border: 1px solid var(--danger-fg); border-radius: 0.5rem; background: var(--danger-bg); }
-.dl__confirm p { color: var(--danger-fg); }
 .dl .notice { margin: 0.75rem 0 0; }
 .button--danger { background: var(--danger-fg); border-color: var(--danger-fg); color: #fff; }
 .button--danger:hover:not(:disabled) { background: #6e150f; border-color: #6e150f; }
@@ -370,8 +366,8 @@ body:has(.entry) { background: radial-gradient(60rem 28rem at 50% 3rem, var(--br
 .composer textarea { border-color: #b9b1a9; }
 .conversation-main h1 { font-size: 1.75rem; letter-spacing: -0.015em; margin: 0 0 0.5rem; }
 .conversation-main > p { color: var(--muted); margin: 0 0 1rem; }
-.conversation-extras .canvas-panel, .conversation-aside .dl { margin: 0; border-radius: 1rem; box-shadow: 0 1px 2px rgba(31, 29, 27, 0.06), 0 8px 28px rgba(31, 29, 27, 0.08); }
-.conversation-extras .canvas-panel { border-top: 4px solid var(--brand); }
+.conversation-aside .canvas-panel, .conversation-aside .dl { margin: 0; border-radius: 1rem; box-shadow: 0 1px 2px rgba(31, 29, 27, 0.06), 0 8px 28px rgba(31, 29, 27, 0.08); }
+.conversation-aside .canvas-panel { border-top: 4px solid var(--brand); }
 .conversation-aside .dl { border-top: 4px solid var(--brand-tint-2); }
 @media (prefers-reduced-motion: reduce) { .composer button { transition: none; } }
 .chat__footer .field__help { margin: 0.25rem 0 0 0.5rem; font-size: 0.75rem; }
@@ -389,9 +385,18 @@ body:has(.entry) { background: radial-gradient(60rem 28rem at 50% 3rem, var(--br
 .choices__list label { flex: 1; cursor: pointer; min-height: 1.5rem; display: flex; align-items: center; }
 .choices fieldset:disabled .choices__list li { opacity: 0.6; }
 
-/* The half-way card: compact, with the long explanation behind a disclosure. */
-.dl__more { margin: 0 0 0.75rem; }
-.dl__more summary { cursor: pointer; color: var(--accent); font-size: 0.875rem; font-weight: 600; min-height: 2.75rem; display: flex; align-items: center; }
-.dl__more summary:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; border-radius: 0.25rem; }
-.dl__more .dl__help { margin: 0.25rem 0 0; font-size: 0.8125rem; line-height: 1.45; }
 .conversation-aside .dl > p:first-of-type { font-size: 0.9375rem; line-height: 1.5; color: var(--muted); }
+
+/* The half-way card: just the buttons, stacked. */
+.dl--bare { display: grid; gap: 0.5rem; padding: 0.9rem 1rem; }
+.dl--bare .dl__actions { display: grid; gap: 0.5rem; }
+.dl--bare button { width: 100%; }
+.dl--bare .notice { margin: 0; }
+
+/* Confirmations: a window over the page. */
+.modal { border: 0; border-radius: 1rem; padding: 1.5rem; width: min(28rem, calc(100vw - 2rem)); box-shadow: 0 20px 60px rgba(31, 29, 27, 0.35); color: var(--fg); }
+.modal::backdrop { background: rgba(31, 29, 27, 0.55); }
+.modal h2 { margin: 0 0 0.5rem; font-size: 1.25rem; }
+.modal p { margin: 0 0 1.25rem; line-height: 1.5; }
+.modal__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; }
+@media print { .modal { display: none !important; } }

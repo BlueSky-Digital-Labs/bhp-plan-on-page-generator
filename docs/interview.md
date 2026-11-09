@@ -5,10 +5,11 @@ turn**. Code: `backend/app/interview/`. It plugs into the conversation stream
 ([conversation.md](conversation.md)) and adds no new endpoint: `GET /api/conversation` now also
 returns the draft as `canvas: {fields, missing_required, ready_for_review}` and the interview's
 position as `progression` (below). The conversation screen starts as one centred chat box. Once the first answer is in, the page
-widens: the **Save your progress** card ([downloads.md](downloads.md)) sits beside the chat (above it on
-a phone) while the canvas is unfinished, and **Your canvas so far** (a progress bar and a small,
-keyboard-scrollable box of the fields) appears below the chat. While a reply is coming, the card's
-place stays and says saving is available once the assistant has replied.
+widens and a side column appears next to the chat (below it on a phone): **Your canvas so far** is a
+checklist of the 16 fields, a tick for each one with an answer (never the answers themselves), in a
+small keyboard-scrollable box with a progress bar; under it, while the canvas is unfinished, the **save
+progress** card ([downloads.md](downloads.md)): two download buttons and a Stop session button. While a
+reply is coming the card's place stays and says saving is available once the assistant has replied.
 When the server says the canvas is ready and the assistant has sent its closing message, a
 **Generate canvas** button appears in the chat under that message; the answer box stays.
 

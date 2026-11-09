@@ -15,8 +15,8 @@ const status = (canvas: boolean, appendix: boolean) => () =>
     revision: 4,
     canvas_downloaded: canvas,
     appendix_downloaded: appendix,
-    purge_eligible: canvas && appendix,
-    lock_reason: canvas && appendix ? null : canvas ? "appendix_not_downloaded" : appendix ? "canvas_not_downloaded" : "both_not_downloaded",
+    purge_eligible: canvas, // the one-page canvas alone unlocks stopping
+    lock_reason: canvas ? null : "canvas_not_downloaded",
     complete: false,
   });
 const file = (name: string) => () =>
@@ -45,15 +45,26 @@ const choose = async (menu: string, item: string | RegExp) => {
 };
 
 describe("SaveProgress", () => {
-  it("tells someone who cannot finish how to save and carry on, and offers the two downloads", async () => {
+  it("is just the two download buttons and Stop session, with nothing else on it", async () => {
     setup({});
-    expect(await screen.findByRole("heading", { name: "Save your progress" })).toBeInTheDocument();
-    expect(screen.getByText(/You do not have to finish now/)).toBeInTheDocument();
-    expect(screen.getByText(/attach either file to your first answer/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Download canvas so far/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Download appendix so far/ })).toBeInTheDocument();
-    expect(await screen.findByText(/Stopping is locked/)).toBeInTheDocument();
-    expect(stopButton()).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Save your progress" })).toHaveClass("sr-only"); // named, not shown
+    expect(screen.getByRole("button", { name: /Download draft canvas/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Download draft appendix/ })).toBeInTheDocument();
+    expect(stopButton()).toBeInTheDocument();
+    expect(screen.queryByText(/You do not have to finish now/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Downloaded|locked|Refresh status/)).not.toBeInTheDocument();
+    expect(document.querySelector("details, ul")).toBeNull();
+  });
+
+  it("keeps Stop session locked until the one-page canvas is downloaded, with the reason for assistive technology", async () => {
+    setup({});
+    await waitFor(() => expect(stopButton()).toBeDisabled());
+    expect(stopButton()).toHaveAccessibleDescription("Download the one-page canvas first.");
+  });
+
+  it("unlocks Stop session the moment the canvas is downloaded, even without the appendix", async () => {
+    setup({ "GET /api/downloads": status(true, false) });
+    await waitFor(() => expect(stopButton()).toBeEnabled());
   });
 
   it.each([
@@ -62,21 +73,22 @@ describe("SaveProgress", () => {
     ["appendix", "Word", "GET /api/appendix?format=docx&revision=4", "idea-appendix-draft-r4.docx"],
   ])("downloads the %s as %s for the current revision and re-reads the status", async (menu, item, key, name) => {
     const { calls } = setup({ [key]: file(name) });
-    await screen.findByText(/Stopping is locked/);
-    await choose(`Download ${menu}`, new RegExp(item));
+    await screen.findByRole("button", { name: /^Stop session/ });
+    await choose(`Download draft ${menu}`, new RegExp(item));
     await waitFor(() => expect(saved).toEqual([name]));
     expect(calls.some((c) => c.key === key)).toBe(true);
     await waitFor(() => expect(calls.filter((c) => c.key === "GET /api/downloads").length).toBeGreaterThan(1));
   });
 
-  it("offers Stop session only once the server says both are saved, and stops after confirmation", async () => {
+  it("stops after the user confirms in the window that opens", async () => {
     const { calls, onStopped } = setup({
       "GET /api/downloads": status(true, true),
       "POST /api/session/purge": () => new Response(null, { status: 204 }),
     });
-    await userEvent.click(await screen.findByRole("button", { name: /^Stop session/ }));
-    expect(screen.getByText("Stop this session now?")).toBeInTheDocument();
-    expect(screen.getByText(/attach one of the files you downloaded/)).toBeInTheDocument();
+    await waitFor(() => expect(stopButton()).toBeEnabled());
+    await userEvent.click(stopButton()!);
+    const dialog = screen.getByRole("dialog", { name: "Stop this session now?" }); // a window, not part of the card
+    expect(dialog).toHaveTextContent(/attach one of the files you downloaded/);
     await userEvent.click(screen.getByRole("button", { name: "Yes, stop and delete everything" }));
     await waitFor(() => expect(onStopped).toHaveBeenCalledOnce());
     expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/session/purge")!.init?.body))).toEqual({ revision: 4 });
@@ -84,9 +96,10 @@ describe("SaveProgress", () => {
 
   it("lets the user keep going instead of stopping", async () => {
     const { calls, onStopped } = setup({ "GET /api/downloads": status(true, true) });
-    await userEvent.click(await screen.findByRole("button", { name: /^Stop session/ }));
+    await waitFor(() => expect(stopButton()).toBeEnabled());
+    await userEvent.click(stopButton()!);
     await userEvent.click(screen.getByRole("button", { name: "Keep going" }));
-    expect(screen.queryByText("Stop this session now?")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(onStopped).not.toHaveBeenCalled();
     expect(calls.some((c) => c.key === "POST /api/session/purge")).toBe(false);
   });
@@ -96,7 +109,8 @@ describe("SaveProgress", () => {
       "GET /api/downloads": status(true, true),
       "POST /api/session/purge": () => envelope("purge_locked", 409),
     });
-    await userEvent.click(await screen.findByRole("button", { name: /^Stop session/ }));
+    await waitFor(() => expect(stopButton()).toBeEnabled());
+    await userEvent.click(stopButton()!);
     await userEvent.click(screen.getByRole("button", { name: "Yes, stop and delete everything" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Stopping is still locked");
     expect(onStopped).not.toHaveBeenCalled();
@@ -108,8 +122,8 @@ describe("SaveProgress", () => {
     ["something_new", /That could not be done/],
   ])("shows fixed guidance when a download is refused (%s), never the server's words", async (code, text) => {
     setup({ "GET /api/canvas-file?format=pdf&revision=4": () => envelope(code, 409) });
-    await screen.findByText(/Stopping is locked/);
-    await choose("Download canvas", /PDF/);
+    await screen.findByRole("button", { name: /^Stop session/ });
+    await choose("Download draft canvas", /PDF/);
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(text);
     expect(alert).not.toHaveTextContent("SERVER-TEXT-MUST-NEVER-RENDER");
@@ -118,8 +132,8 @@ describe("SaveProgress", () => {
 
   it("hands a lost session to the page", async () => {
     const { onAccessLost } = setup({ "GET /api/canvas-file?format=pdf&revision=4": () => envelope("unauthenticated", 401) });
-    await screen.findByText(/Stopping is locked/);
-    await choose("Download canvas", /PDF/);
+    await screen.findByRole("button", { name: /^Stop session/ });
+    await choose("Download draft canvas", /PDF/);
     await waitFor(() => expect(onAccessLost).toHaveBeenCalled());
   });
 });

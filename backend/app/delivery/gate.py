@@ -1,7 +1,8 @@
 """The one rule for "may this session be deleted by the user?".
 
-A session may be deleted once both documents, in any format, have been sent for the *current*
+A session may be deleted once the one-page canvas, in any format, has been sent for the *current*
 revision, whether the canvas is finished or an unfinished draft the user saves to carry on later.
+(The appendix is still reported, but it never holds deletion back.)
 Used both to show the download status and, again, immediately before a deletion is accepted. It
 reads only server-held facts: what the client says about itself is never an input.
 """
@@ -15,8 +16,6 @@ LOCK_REASONS = (
     "not_ready",  # nothing answered yet, so there is nothing to save
     "turn_in_progress",
     "canvas_not_downloaded",
-    "appendix_not_downloaded",
-    "both_not_downloaded",
 )
 
 
@@ -48,7 +47,7 @@ def evaluate_gate(
     reply_finished: bool,
     deliveries: dict[DocumentKind, Delivery],
 ) -> PurgeGate:
-    """Both documents count only if they were sent for the *current* revision.
+    """A document counts only if it was sent for the *current* revision.
 
     So an amendment (a new revision) resets both at once, and a late record for an older revision
     can never unlock anything: its revision no longer matches. `started` means at least one
@@ -61,10 +60,6 @@ def evaluate_gate(
         reason = "not_ready"
     elif not reply_finished:
         reason = "turn_in_progress"
-    elif not canvas and not appendix:
-        reason = "both_not_downloaded"
     elif not canvas:
         reason = "canvas_not_downloaded"
-    elif not appendix:
-        reason = "appendix_not_downloaded"
     return PurgeGate(revision, canvas, appendix, reason is None, reason, complete)

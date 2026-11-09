@@ -63,7 +63,7 @@ export function StartScreen({
         <ul>
           <li>Your idea is processed temporarily, on Australian-hosted infrastructure.</li>
           <li>
-            After you have downloaded both documents, you can choose to purge your session straight
+            After you have downloaded the one-page canvas, you can choose to purge your session straight
             away.
           </li>
           <li>

@@ -23,10 +23,11 @@ const MESSAGES: Record<string, string> = {
 };
 const FAILED = "That could not be done. Please try again.";
 
-// For someone who cannot finish now: download the canvas and the appendix as they are (marked as an
-// unfinished draft), then stop. Stopping deletes the session on the server too. Later, a new session
-// plus one of the downloaded files, attached to the first answer, carries on from there. The
-// server's gate decides when stopping is allowed; this only shows it.
+// For someone who cannot finish now: two buttons to download the canvas and the appendix as they are
+// (marked as an unfinished draft), and a Stop session button that unlocks once the one-page canvas has
+// been downloaded. Stopping deletes the session on the server too. Later, a new session plus one of the
+// downloaded files, attached to the first answer, carries on from there. The server's gate decides when
+// stopping is allowed; this only shows it.
 export function SaveProgress({
   revision,
   onStopped,
@@ -69,19 +70,15 @@ export function SaveProgress({
       onPurged={onStopped}
       onAccessLost={onAccessLost}
     >
-      <p>
-        You do not have to finish now. Download both files as they are, then stop the session. Later, start a new session
-        and attach either file to your first answer: the assistant carries on with what is still missing.
-      </p>
       <div className="dl__actions">
         <DownloadMenu
-          label="Download canvas so far"
+          label="Download draft canvas"
           choices={CANVAS_CHOICES}
           busy={busy === "canvas"}
           onChoose={(key) => void run("canvas", () => downloadCanvas(key as CanvasFormat, revision))}
         />
         <DownloadMenu
-          label="Download appendix so far"
+          label="Download draft appendix"
           choices={APPENDIX_CHOICES}
           busy={busy === "appendix"}
           onChoose={(key) => void run("appendix", () => downloadAppendix(key as AppendixFormat, revision))}

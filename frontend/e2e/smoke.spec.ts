@@ -10,14 +10,14 @@ async function chooseDownload(page: Page, menu: string, item: string) {
 
 // What the server says about the two PDFs. The page only shows it; the real server decides deleting.
 async function mockDownloads(page: Page, canvas: boolean, appendix: boolean, revision = 3) {
-  const lock = canvas ? "appendix_not_downloaded" : appendix ? "canvas_not_downloaded" : "both_not_downloaded";
+  const lock = canvas ? null : "canvas_not_downloaded";
   await page.route("**/api/downloads", (route) =>
     route.fulfill({
       json: {
         revision,
         canvas_downloaded: canvas,
         appendix_downloaded: appendix,
-        purge_eligible: canvas && appendix,
+        purge_eligible: canvas,
         lock_reason: canvas && appendix ? null : lock,
         complete: true,
       },
@@ -598,7 +598,7 @@ test.describe("one-page canvas", () => {
     };
     await page.route("**/api/conversation", (route) => route.fulfill({ json: ASKING }));
     await page.route("**/api/downloads", (route) =>
-      route.fulfill({ json: { revision: 2, canvas_downloaded: false, appendix_downloaded: false, purge_eligible: false, lock_reason: "both_not_downloaded", complete: false } }),
+      route.fulfill({ json: { revision: 2, canvas_downloaded: false, appendix_downloaded: false, purge_eligible: false, lock_reason: "canvas_not_downloaded", complete: false } }),
     );
     let sent: unknown = null;
     await page.route("**/api/conversation/turns", (route) => {
@@ -627,7 +627,7 @@ test.describe("one-page canvas", () => {
     await expect(page.getByRole("group", { name: "Choose one" })).toHaveCount(0);
   });
 
-  test("saving halfway: download both files as they are, stop the session, and be told how to carry on", async ({ page }) => {
+  test("saving halfway: download the canvas as it is, stop the session, and be told how to carry on", async ({ page }) => {
     await signInAndWait(page);
     const HALF = {
       revision: 2,
@@ -648,8 +648,8 @@ test.describe("one-page canvas", () => {
           revision: HALF.revision,
           canvas_downloaded: canvasSaved,
           appendix_downloaded: appendixSaved,
-          purge_eligible: canvasSaved && appendixSaved,
-          lock_reason: canvasSaved && appendixSaved ? null : "both_not_downloaded",
+          purge_eligible: canvasSaved,
+          lock_reason: canvasSaved ? null : "canvas_not_downloaded",
           complete: false,
         },
       }),
@@ -671,46 +671,44 @@ test.describe("one-page canvas", () => {
 
     const card = page.locator(".dl");
     await expect(card.getByRole("heading", { name: "Save your progress" })).toBeVisible();
-    await expect(card.getByRole("button", { name: /^Stop session/ })).toHaveCount(0); // locked until both are saved
+    await expect(card.getByRole("button", { name: /^Stop session/ })).toBeDisabled(); // locked until the canvas is saved
 
-    await card.getByRole("button", { name: /Download canvas so far/ }).click();
+    // Only the canvas is downloaded: that alone unlocks stopping.
+    await card.getByRole("button", { name: /Download draft canvas/ }).click();
     await card.getByRole("menuitem", { name: "PDF" }).click();
-    await card.getByRole("button", { name: /Download appendix so far/ }).click();
-    await card.getByRole("menuitem", { name: "PDF" }).click();
-    await card.getByRole("button", { name: "Refresh status" }).click();
+    await expect(card.getByRole("button", { name: /^Stop session/ })).toBeEnabled({ timeout: 6000 });
+    expect(appendixSaved).toBe(false);
 
+    // The confirmation is a window over the page, not something added to the card.
     await card.getByRole("button", { name: /^Stop session/ }).click();
-    await expect(card.getByText(/attach one of the files you downloaded/)).toBeVisible();
-    await card.getByRole("button", { name: "Yes, stop and delete everything" }).click();
+    const dialog = page.getByRole("dialog", { name: "Stop this session now?" });
+    await expect(dialog.getByText(/attach one of the files you downloaded/)).toBeVisible();
+    expect(await dialog.evaluate((el) => el.matches(":modal"))).toBe(true); // the page behind is inert
+    await dialog.getByRole("button", { name: "Yes, stop and delete everything" }).click();
     await expect(page).toHaveURL(/\/$/);
     await expect(page.getByRole("status")).toContainText("Your session was stopped");
     expect(purged).toEqual({ revision: HALF.revision });
   });
 
-  test("download status: each PDF is shown on its own, deleting stays locked until the server says both are done", async ({ page }) => {
+  test("download status: deleting stays locked until the server says the one-page canvas is downloaded", async ({ page }) => {
     await signInAndWait(page);
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
     const card = page.locator(".dl");
-    const cases: Array<[boolean, boolean, string, string, string]> = [
-      [false, false, "Not downloaded yet", "Not downloaded yet", "the one-page canvas and the appendix"],
-      [true, false, "Downloaded", "Not downloaded yet", "the appendix"],
-      [false, true, "Not downloaded yet", "Downloaded", "the one-page canvas"],
-    ];
-    for (const [canvas, appendix, canvasText, appendixText, outstanding] of cases) {
+    for (const [canvas, appendix] of [[false, false], [false, true]] as const) {
       await page.unroute("**/api/downloads");
       await mockDownloads(page, canvas, appendix);
       await page.goto("/review");
       await expect(card.getByRole("heading", { name: "Your documents" })).toBeVisible();
-      await expect(card.locator("li", { hasText: "One-page canvas" })).toContainText(canvasText);
-      await expect(card.locator("li", { hasText: "Appendix" })).toContainText(appendixText);
-      await expect(card).toContainText(`Still to download: ${outstanding}.`);
+      await expect(card.locator("li", { hasText: "One-page canvas" })).toContainText("Not downloaded yet");
+      await expect(card).toContainText("Still to download: the one-page canvas.");
       await expect(page.getByRole("button", { name: /^Delete my session/ })).toHaveCount(0);
     }
     await expect(card).toContainText("It cannot check that the file was saved on your device");
 
     await page.unroute("**/api/downloads");
-    await mockDownloads(page, true, true);
+    await mockDownloads(page, true, false); // the canvas alone is enough
     await page.goto("/review");
+    await expect(card.locator("li", { hasText: "One-page canvas" })).toContainText("Downloaded");
     await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeVisible();
     await expect(card).not.toContainText("Deleting is locked");
   });
@@ -741,7 +739,7 @@ test.describe("one-page canvas", () => {
     await page.request.get("/api/session").then((r) => expect(r.status()).toBe(200)); // still signed in: nothing was touched
   });
 
-  test("deleting: after both documents, the user confirms and returns to entry with a plain notice", async ({ page }) => {
+  test("deleting: after the one-page canvas, the user confirms and returns to entry with a plain notice", async ({ page }) => {
     await signInAndWait(page);
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
     await mockDownloads(page, true, true);
@@ -753,9 +751,10 @@ test.describe("one-page canvas", () => {
     });
     await page.goto("/review");
     await page.getByRole("button", { name: /^Delete my session/ }).click();
-    await expect(page.getByText(/cannot be recovered/)).toBeVisible();
-    await page.getByRole("button", { name: "Keep my session" }).click();
-    await expect(page.getByText(/cannot be recovered/)).toHaveCount(0);
+    const dialog = page.getByRole("dialog", { name: "Delete this session now?" });
+    await expect(dialog.getByText(/cannot be recovered/)).toBeVisible();
+    await dialog.getByRole("button", { name: "Keep my session" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await page.getByRole("button", { name: /^Delete my session/ }).click();
     await page.getByRole("button", { name: "Yes, delete everything" }).click();
     await expect(page).toHaveURL(/\/$/);

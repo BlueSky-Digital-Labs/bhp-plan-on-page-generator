@@ -333,8 +333,10 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
     !blocked &&
     history?.canvas?.ready_for_review !== true &&
     turns.some((t) => t.role === "user" && t.status === "complete");
-  // The card's column stays put while a reply is coming, so the chat does not jump about.
-  const showAside = !firstAnswer && history?.canvas?.ready_for_review !== true;
+  // The side column (the canvas checklist, and the way to save and stop) appears once an answer is in
+  // and stays, so the chat does not jump about as replies come and go.
+  const showAside = !firstAnswer;
+  const canvasReady = history?.canvas?.ready_for_review === true;
   const submitMessage = submitError ? (SUBMIT_MESSAGES[submitError.code] ?? UNSURE_SAVED) : null;
   // A question with a fixed list of answers is picked from, not typed, once the assistant has asked it
   // and nothing else is under way. The server names the list; typing instead is one click away.
@@ -370,10 +372,12 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
         )}
       </div>
 
-      {/* The chat, with the save-and-stop card beside it (above it on a phone) once an answer is in. */}
+      {/* Nothing but the chat until the conversation starts. Then the checklist and the save-and-stop card
+          sit beside it (below it on a phone). */}
       <div className={showAside ? "conversation-top conversation-top--aside" : "conversation-top"}>
         {showAside && (
-          <aside className="conversation-aside" aria-label="Save and stop">
+          <aside className="conversation-aside" aria-label="Your progress">
+            <CanvasPanel canvas={history?.canvas} />
             {saveVisible && history ? (
               <SaveProgress
                 revision={history.revision}
@@ -382,7 +386,9 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
                 onOutOfDate={() => void refresh()}
               />
             ) : (
-              <p className="conversation-aside__wait">You can save and stop here once the assistant has replied.</p>
+              !canvasReady && (
+                <p className="conversation-aside__wait">You can save and stop here once the assistant has replied.</p>
+              )
             )}
           </aside>
         )}
@@ -582,12 +588,6 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
         </section>
         </div>
       </div>
-      {/* Nothing but the chat until the conversation starts. Then the canvas so far appears below it. */}
-      {!firstAnswer && (
-        <div className="conversation-extras">
-          <CanvasPanel canvas={history?.canvas} />
-        </div>
-      )}
     </div>
   );
 }

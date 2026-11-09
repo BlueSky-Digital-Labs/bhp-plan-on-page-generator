@@ -64,16 +64,16 @@ def test_status_follows_each_download_and_names_what_is_outstanding(world):
         "canvas_downloaded": False,
         "appendix_downloaded": False,
         "purge_eligible": False,
-        "lock_reason": "both_not_downloaded",
+        "lock_reason": "canvas_not_downloaded",
         "complete": True,
     }
-    assert canvas_file(client, "pdf").status_code == 200
+    assert appendix(client, "pdf").status_code == 200  # the appendix alone unlocks nothing
     got = status(client).json()
-    assert got["canvas_downloaded"] and not got["appendix_downloaded"]
-    assert got["lock_reason"] == "appendix_not_downloaded" and not got["purge_eligible"]
-    assert appendix(client, "pdf").status_code == 200
+    assert got["appendix_downloaded"] and not got["canvas_downloaded"]
+    assert got["lock_reason"] == "canvas_not_downloaded" and not got["purge_eligible"]
+    assert canvas_file(client, "pdf").status_code == 200  # the one-page canvas unlocks it at once
     got = status(client).json()
-    assert got["appendix_downloaded"] and got["purge_eligible"] and got["lock_reason"] is None
+    assert got["canvas_downloaded"] and got["purge_eligible"] and got["lock_reason"] is None
 
 
 def test_status_is_never_cached_and_needs_a_session(world):
@@ -88,7 +88,7 @@ def test_any_format_of_a_document_counts(world):
     assert canvas_file(client, "pptx").status_code == 200
     got = status(client).json()
     assert got["canvas_downloaded"] and not got["appendix_downloaded"]
-    assert got["lock_reason"] == "appendix_not_downloaded" and not got["purge_eligible"]
+    assert got["purge_eligible"] and got["lock_reason"] is None
     assert appendix(client, "docx").status_code == 200
     got = status(client).json()
     assert got["canvas_downloaded"] and got["appendix_downloaded"]
@@ -134,11 +134,9 @@ def test_an_unfinished_draft_is_saved_then_the_session_can_be_stopped(world):
     say(client, OPENING)  # one answer in, the canvas still incomplete
     assert history(client)["canvas"]["ready_for_review"] is False
     got = status(client).json()
-    assert got["complete"] is False and got["lock_reason"] == "both_not_downloaded"
+    assert got["complete"] is False and got["lock_reason"] == "canvas_not_downloaded"
     assert purge(client).status_code == 409  # nothing saved yet: still locked
-    assert canvas_file(client, "pdf").status_code == 200
-    assert status(client).json()["lock_reason"] == "appendix_not_downloaded"
-    assert appendix(client, "docx").status_code == 200  # any format counts
+    assert canvas_file(client, "pdf").status_code == 200  # the one-page canvas is all it takes
     got = status(client).json()
     assert got["purge_eligible"] and got["lock_reason"] is None and got["complete"] is False
     session = session_of(world)
@@ -159,7 +157,7 @@ def test_an_answer_after_saving_a_draft_means_saving_again_before_stopping(world
     assert status(client).json()["purge_eligible"]
     say(client, answer_for(reply))  # carried on after saving
     got = status(client).json()
-    assert not got["purge_eligible"] and got["lock_reason"] == "both_not_downloaded"
+    assert not got["purge_eligible"] and got["lock_reason"] == "canvas_not_downloaded"
     assert purge(client).status_code == 409
 
 
@@ -239,11 +237,9 @@ def test_if_the_status_cannot_be_read_it_says_so_and_unlocks_nothing(world, monk
 # --- deleting ----------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("which", ["none", "canvas", "appendix"])
-def test_deleting_is_refused_until_both_pdfs_are_downloaded_and_changes_nothing(world, which):
+@pytest.mark.parametrize("which", ["none", "appendix"])
+def test_deleting_is_refused_until_the_canvas_is_downloaded_and_changes_nothing(world, which):
     client = ready_client(world)
-    if which == "canvas":
-        assert canvas_file(client, "pdf").status_code == 200
     if which == "appendix":
         assert appendix(client, "pdf").status_code == 200
     before = history(client)
@@ -252,6 +248,12 @@ def test_deleting_is_refused_until_both_pdfs_are_downloaded_and_changes_nothing(
     assert "set-cookie" not in response.headers  # the session was not touched
     assert history(client) == before
     assert status(client).status_code == 200  # still signed in
+
+
+def test_deleting_after_the_canvas_alone_is_downloaded_is_accepted(world):
+    client = ready_client(world)
+    assert canvas_file(client, "pdf").status_code == 200
+    assert purge(client).status_code == 204
 
 
 def test_deleting_after_both_downloads_removes_everything_and_ends_the_session(world):
@@ -377,7 +379,7 @@ def test_a_refused_purge_is_logged_with_its_reason(world):
     finally:
         logger.removeHandler(handler)
     assert [(r.getMessage(), r.reason) for r in records] == [
-        ("purge_refused", "both_not_downloaded")
+        ("purge_refused", "canvas_not_downloaded")
     ]
 
 

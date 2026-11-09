@@ -23,9 +23,10 @@ not count.
 ## The gate
 
 `evaluate_gate` (`app/delivery/gate.py`) is the one rule, used both to show the status and again
-immediately before a deletion is accepted. Both documents count only if they were sent for the
-**current** revision, so an amendment resets both at once, and a completion that arrives late for an
-older revision can never unlock anything (its revision no longer matches). Eligibility also needs at
+immediately before a deletion is accepted. **The one-page canvas, in any format, is all it takes**: the
+appendix is still recorded and reported but never holds deletion back. A document counts only if it was
+sent for the **current** revision, so an amendment resets both at once, and a completion that arrives
+late for an older revision can never unlock anything (its revision no longer matches). Eligibility also needs at
 least one answer to be in and the assistant's reply to be finished. It does **not** need the canvas to
 be complete or confirmed: someone who cannot finish can save what they have and **stop** the session
 (see "Saving a draft and stopping" below). A finished canvas is simply the case where `complete` is true.
@@ -34,11 +35,11 @@ be complete or confirmed: someone who cannot finish can save what they have and 
 
 ```json
 {"revision": 3, "canvas_downloaded": true, "appendix_downloaded": false,
- "purge_eligible": false, "lock_reason": "appendix_not_downloaded", "complete": true}
+ "purge_eligible": true, "lock_reason": null, "complete": true}
 ```
 
 `lock_reason` is one of `not_ready` (nothing answered yet, so nothing to save), `turn_in_progress`,
-`canvas_not_downloaded`, `appendix_not_downloaded`, `both_not_downloaded`, or null when eligible.
+`canvas_not_downloaded`, or null when eligible.
 `complete` is true only when every required answer is in and the user confirmed this revision; it only
 chooses the wording on screen ("delete" or "stop").
 
@@ -71,11 +72,13 @@ revision** as long as one answer is in and the assistant has finished replying
   page only, and the route refuses an unfinished one (`canvas_not_ready`).
 
 On the conversation screen, once an answer is in and the canvas is not yet complete, a **Save your
-progress** card offers *Download canvas so far* and *Download appendix so far*. When the server says
-both were saved for the current revision, **Stop session** appears; after a confirmation it calls the
-same `POST /api/session/purge`, so the server deletes the conversation, draft and records and ends the
-sign-in, exactly as for a finished canvas. The entry page then explains how to carry on. Answering
-again after saving makes a new revision, so both documents must be saved again before stopping.
+progress** card is just two buttons, *Download draft canvas* and *Download draft appendix*, and a
+**Stop session** button that stays locked until the server says the one-page canvas was saved for the
+current revision. Stopping asks in a window over the page (a modal dialog, with focus on the safe
+choice and Escape to close), then calls the same `POST /api/session/purge`, so the server deletes the
+conversation, draft and records and ends the sign-in, exactly as for a finished canvas. The entry page
+then explains how to carry on. Answering again after saving makes a new revision, so the canvas must be
+saved again before stopping.
 
 **Carrying on later** uses the existing attach-a-file feature ([attachments.md](attachments.md)): in a
 new session the user attaches the downloaded canvas PDF or the appendix to their first answer, and the
@@ -86,13 +89,14 @@ character limit on attached text, which is cut at a word.
 ## On screen
 
 On the review page, once the canvas is confirmed, a **Your documents** card (on the conversation screen, the **Save your progress** card, with its own wording) shows each document as
-"Downloaded" or "Not downloaded yet" (words and symbols, not colour alone), a locked explanation
-that names what is outstanding, guidance to save both documents, and a **Refresh status** button. The
-**Delete my session** button appears only when the server says both are done, and asks for one more
-confirmation. The page:
+the one-page canvas as "Downloaded" or "Not downloaded yet" (words and symbols, not colour alone), a
+locked explanation, guidance to save the documents, and a **Refresh status** button. The
+**Delete my session** button appears only when the server says the canvas was downloaded, and asks for
+one more confirmation in a window over the page. The page:
 
-* reads the status on arrival, after each download attempt, and twice more (1.5 s and 4 s later)
-  because a file can finish just after the first read; then it stops, leaving the manual button;
+* reads the status on arrival, after each download attempt, and three more times (1.5 s, 4 s and 10 s
+  later) because a file can finish just after the first read; then it stops (the review card also has
+  the manual button);
 * hides the delete action while a read is in flight and drops it if a read fails (no stale
   eligibility), keeps only the newest read's answer, and re-reads the canvas if the status is for a
   different revision (another tab answered);
@@ -139,7 +143,7 @@ DynamoDB itself is simulated with `moto`.
 
 * "Downloaded" is a server-side delivery boundary only. See above.
 * Sign-out deletes immediately and is not gated.
-* A user who never completes the canvas, or never downloads both files, cannot delete manually:
+* A user who never completes the canvas, or never downloads the one-page canvas, cannot delete manually:
   their session is removed by the 24-hour expiry ([expiry.md](expiry.md)).
 * **Not run against real DynamoDB.** The DynamoDB stores are tested against `moto`, which implements
   transactions and conditions faithfully but is not AWS. Run [the canary scan](deployment.md) once

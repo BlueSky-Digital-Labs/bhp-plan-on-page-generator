@@ -20,8 +20,9 @@ function show(value: string | string[] | undefined): string | null {
   return value ? value : null;
 }
 
-// Shows what the server has recorded in the draft. It only ever displays; the validator and the
-// interviewer on the server decide what is complete. Values render as text (React escapes them).
+// Shows which fields the server has recorded in the draft, as a tick each (never the answers
+// themselves). It only ever displays; the validator and the interviewer on the server decide what is
+// complete.
 export function CanvasPanel({ canvas = EMPTY }: { canvas?: CanvasView }) {
   const remaining = canvas.missing_required.length;
   const answered = Math.min(REQUIRED_TOTAL, Math.max(0, REQUIRED_TOTAL - remaining));
@@ -40,22 +41,30 @@ export function CanvasPanel({ canvas = EMPTY }: { canvas?: CanvasView }) {
             ? `${remaining} required answer${remaining === 1 ? "" : "s"} still to go.`
             : "Nearly there: a few last questions."}
       </p>
-      {/* A small box that scrolls. Focusable and labelled so keyboard users can scroll it too. */}
+      {/* A checklist, not the answers: a tick once the field has an answer. It is a small box that
+          scrolls, focusable and labelled so keyboard users can scroll it too. */}
       <div className="canvas-panel__scroll" role="region" aria-label="Canvas fields so far" tabIndex={0}>
-        <dl>
+        <ul className="canvas-panel__list">
           {ROWS.map((row) => {
-            const value = show(canvas.fields[row.id]);
+            const done = show(canvas.fields[row.id]) !== null;
             return (
-              <div key={row.id} className="canvas-panel__row" data-testid={`canvas-${row.id}`}>
-                <dt>
+              <li
+                key={row.id}
+                className={done ? "canvas-panel__row canvas-panel__row--done" : "canvas-panel__row"}
+                data-testid={`canvas-${row.id}`}
+              >
+                <span className="canvas-panel__tick" aria-hidden="true">
+                  {done ? "✓" : ""}
+                </span>
+                <span className="canvas-panel__label">
                   {row.label}
                   {!row.required && <span className="canvas-panel__optional"> (optional)</span>}
-                </dt>
-                <dd className={value ? undefined : "canvas-panel__empty"}>{value ?? "Not answered yet"}</dd>
-              </div>
+                </span>
+                <span className="sr-only">{done ? "Answered" : "Not answered yet"}</span>
+              </li>
             );
           })}
-        </dl>
+        </ul>
       </div>
     </section>
   );

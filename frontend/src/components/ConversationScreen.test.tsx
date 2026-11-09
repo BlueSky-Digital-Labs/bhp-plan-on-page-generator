@@ -198,7 +198,7 @@ describe("interview phase", () => {
 });
 
 describe("canvas draft", () => {
-  it("shows only the chat at the start, then the canvas so far below it once the conversation begins, refreshed after each reply", async () => {
+  it("shows only the chat at the start, then the canvas checklist beside it once the conversation begins, refreshed after each reply", async () => {
     const canvas0 = { fields: {}, missing_required: Array(14).fill("x"), ready_for_review: false };
     const canvas1 = {
       fields: { achieve: "Faster handover" },
@@ -223,7 +223,8 @@ describe("canvas draft", () => {
     await typeAndSend("Faster handover");
     expect(await screen.findByRole("heading", { name: "Your canvas so far" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("canvas-progress")).toHaveTextContent("13 required answers still to go"));
-    expect(within(screen.getByTestId("canvas-achieve")).getByText("Faster handover")).toBeInTheDocument();
+    expect(within(screen.getByTestId("canvas-achieve")).getByText("Answered")).toBeInTheDocument(); // a tick, not the answer
+    expect(screen.queryByText("Faster handover", { selector: ".canvas-panel *" })).not.toBeInTheDocument();
   });
 
   it("keeps the canvas fields in a small box that scrolls, which a keyboard user can reach and scroll", async () => {
@@ -236,15 +237,18 @@ describe("canvas draft", () => {
     expect(box).toHaveFocus();
   });
 
-  it("puts the save-your-progress card beside the chat (above it on a phone) and the canvas box below", async () => {
+  it("puts the canvas checklist and then the save card in a side column next to the chat", async () => {
     const canvas = { fields: {}, missing_required: ["team"], ready_for_review: false };
     setup({ "GET /api/conversation": withCanvas(canvas, 1, user(), bot("complete", "Which team?")) });
     const chat = await screen.findByRole("region", { name: "Chat with the assistant" });
     const canvasBox = await screen.findByRole("heading", { name: "Your canvas so far" });
     const save = await screen.findByRole("heading", { name: "Save your progress" });
     const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(follows(save, chat)).toBe(true);
-    expect(follows(chat, canvasBox)).toBe(true);
+    const side = screen.getByRole("complementary", { name: "Your progress" });
+    expect(side).toContainElement(canvasBox);
+    expect(side).toContainElement(save);
+    expect(side).not.toContainElement(chat);
+    expect(follows(canvasBox, save)).toBe(true);
   });
 
   it("keeps the save card's place while a reply is coming, without offering the downloads", async () => {
@@ -718,8 +722,8 @@ describe("saving progress to stop and carry on later", () => {
       "GET /api/conversation": withCanvas(incomplete, 1, user(), bot("complete", "Which team?")),
     });
     expect(await screen.findByRole("heading", { level: 2, name: "Save your progress" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Download canvas so far/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Stop session/ })).not.toBeInTheDocument(); // the gate is still locked
+    expect(screen.getByRole("button", { name: /Download draft canvas/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Stop session/ })).toBeDisabled(); // the gate is still locked
     expect(calls.some((c) => c.key === "POST /api/session/purge")).toBe(false);
   });
 
