@@ -198,7 +198,7 @@ describe("interview phase", () => {
 });
 
 describe("canvas draft", () => {
-  it("shows what the server has saved beside the conversation, and refreshes it after each reply", async () => {
+  it("shows only the chat at the start, then the canvas so far below it once the conversation begins, refreshed after each reply", async () => {
     const canvas0 = { fields: {}, missing_required: Array(14).fill("x"), ready_for_review: false };
     const canvas1 = {
       fields: { achieve: "Faster handover" },
@@ -214,10 +214,37 @@ describe("canvas draft", () => {
       "POST /api/conversation/turns": created(),
       [STREAM]: () => ndjson([{ type: "delta", text: "Thanks. " }, { type: "complete" }]),
     });
-    expect(await screen.findByTestId("canvas-progress")).toHaveTextContent("14 required answers still to go");
+    // At the start: the chat box and nothing else.
+    expect(await screen.findByLabelText(/Describe your idea/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Your canvas so far" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("canvas-progress")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Save your progress" })).not.toBeInTheDocument();
+
     await typeAndSend("Faster handover");
+    expect(await screen.findByRole("heading", { name: "Your canvas so far" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("canvas-progress")).toHaveTextContent("13 required answers still to go"));
     expect(within(screen.getByTestId("canvas-achieve")).getByText("Faster handover")).toBeInTheDocument();
+  });
+
+  it("keeps the canvas fields in a small box that scrolls, which a keyboard user can reach and scroll", async () => {
+    const canvas = { fields: { team: "Ops" }, missing_required: ["priority"], ready_for_review: false };
+    setup({ "GET /api/conversation": withCanvas(canvas, 1, user(), bot("complete", "Which team?")) });
+    const box = await screen.findByRole("region", { name: "Canvas fields so far" });
+    expect(box).toHaveAttribute("tabindex", "0");
+    expect(within(box).getByTestId("canvas-team")).toBeInTheDocument();
+    box.focus();
+    expect(box).toHaveFocus();
+  });
+
+  it("puts the canvas box below the chat and the save-your-progress card after it", async () => {
+    const canvas = { fields: {}, missing_required: ["team"], ready_for_review: false };
+    setup({ "GET /api/conversation": withCanvas(canvas, 1, user(), bot("complete", "Which team?")) });
+    const chat = await screen.findByRole("region", { name: "Chat with the assistant" });
+    const canvasBox = await screen.findByRole("heading", { name: "Your canvas so far" });
+    const save = await screen.findByRole("heading", { name: "Save your progress" });
+    const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(chat, canvasBox)).toBe(true);
+    expect(follows(canvasBox, save)).toBe(true);
   });
 
   it("announces readiness from the server's verdict, not from anything the page works out itself", async () => {
@@ -599,7 +626,8 @@ describe("attaching a file", () => {
   it("never treats the assistant's text as an attachment", async () => {
     setup({ "GET /api/conversation": convo(1, user(), bot("complete", BLOCK)) });
     await screen.findByText(/Attached file: idea.json/, { selector: "p" });
-    expect(document.querySelector("details")).toBeNull();
+    const chat = screen.getByRole("region", { name: "Chat with the assistant" });
+    expect(chat.querySelector("details")).toBeNull(); // nothing in the chat is folded away like an attachment
   });
 
   it("cannot attach while an answer is being sent or a reply is on its way", async () => {

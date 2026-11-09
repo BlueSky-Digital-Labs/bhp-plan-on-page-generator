@@ -190,12 +190,23 @@ export function DownloadStatus({
         </p>
       )}
 
-      <p className="dl__help">
-        {copy.help} &ldquo;Downloaded&rdquo; means this app
-        finished sending the file to your browser. It cannot check that the file was saved on your device, and nothing is
-        submitted to a backlog. If a download is slow, the status may take a moment: choose Refresh status, which does not
-        download the file again.
-      </p>
+      {variant === "draft" ? (
+        // On the half-way card the explanation sits behind a small disclosure, to keep the card short.
+        <details className="dl__more">
+          <summary>What does &ldquo;Downloaded&rdquo; mean?</summary>
+          <p className="dl__help">
+            {copy.help} &ldquo;Downloaded&rdquo; means this app finished sending the file to your browser. It cannot check that
+            the file was saved on your device, and nothing is submitted to a backlog. If a download is slow, the status may
+            take a moment: choose Refresh status, which does not download the file again.
+          </p>
+        </details>
+      ) : (
+        <p className="dl__help">
+          {copy.help} &ldquo;Downloaded&rdquo; means this app finished sending the file to your browser. It cannot check that
+          the file was saved on your device, and nothing is submitted to a backlog. If a download is slow, the status may take
+          a moment: choose Refresh status, which does not download the file again.
+        </p>
+      )}
 
       <div className="dl__actions">
         <button type="button" className="button--secondary" onClick={() => void refresh()} disabled={state.phase === "checking"}>

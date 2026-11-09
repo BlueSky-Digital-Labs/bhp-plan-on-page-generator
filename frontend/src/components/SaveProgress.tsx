@@ -70,9 +70,8 @@ export function SaveProgress({
       onAccessLost={onAccessLost}
     >
       <p>
-        You do not have to finish now. Download your canvas and appendix as they are, then stop the session. Later, start a
-        new session and attach either file to your first answer: the assistant reads it and carries on with what is still
-        missing.
+        You do not have to finish now. Download both files as they are, then stop the session. Later, start a new session
+        and attach either file to your first answer: the assistant carries on with what is still missing.
       </p>
       <div className="dl__actions">
         <DownloadMenu

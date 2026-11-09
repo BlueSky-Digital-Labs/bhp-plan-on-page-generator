@@ -334,7 +334,7 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
       : null;
 
   return (
-    <div className="conversation-layout">
+    <div className="conversation">
       <div className="conversation-main">
         <h1>Describe your idea</h1>
         {firstAnswer && (
@@ -511,7 +511,7 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
                   maxLength={MAX_ANSWER_CHARS}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
-                  placeholder={firstAnswer ? "Describe your idea in your own words…" : "Type your answer…"}
+                  placeholder={firstAnswer ? "Describe your idea…" : "Type your answer…"}
                   aria-describedby="answer-help"
                 />
                 <button type="submit" disabled={blocked || !composed.trim()}>
@@ -527,16 +527,22 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
             )}
           </div>
         </section>
-        {saveVisible && history && (
-          <SaveProgress
-            revision={history.revision}
-            onStopped={() => navigate(ROUTES.entry, { replace: true, notice: "session_stopped" })}
-            onAccessLost={onAccessLost}
-            onOutOfDate={() => void refresh()}
-          />
-        )}
       </div>
-      <CanvasPanel canvas={history?.canvas} onGenerate={() => navigate(ROUTES.review)} />
+      {/* Nothing but the chat until the conversation starts. Then the canvas so far, and (while it is
+          unfinished) the way to save it and stop, appear below it. */}
+      {!firstAnswer && (
+        <div className={saveVisible && history ? "conversation-extras conversation-extras--two" : "conversation-extras"}>
+          <CanvasPanel canvas={history?.canvas} onGenerate={() => navigate(ROUTES.review)} />
+          {saveVisible && history && (
+            <SaveProgress
+              revision={history.revision}
+              onStopped={() => navigate(ROUTES.entry, { replace: true, notice: "session_stopped" })}
+              onAccessLost={onAccessLost}
+              onOutOfDate={() => void refresh()}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

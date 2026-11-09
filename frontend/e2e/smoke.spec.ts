@@ -461,8 +461,13 @@ test.describe("one-page canvas", () => {
     // Nothing offered while the canvas is incomplete (the real server says 14 answers to go).
     await expect(page.getByRole("button", { name: "Generate canvas" })).toHaveCount(0);
 
-    // The conversation feature is not exercised here, so the server's "ready" verdict is simulated.
-    await page.route("**/api/conversation", (route) => route.fulfill({ json: READY }));
+    // The conversation feature is not exercised here, so the server's "ready" verdict is simulated, with
+    // the answers a finished canvas always has (the canvas box appears once the conversation has begun).
+    const turns = [
+      { turn_id: "1".repeat(32), role: "user", text: "We copy shift notes between spreadsheets.", status: "complete" },
+      { turn_id: "2".repeat(32), role: "assistant", text: "Thanks, that is everything I need.", status: "complete" },
+    ];
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, turns } }));
     await page.reload();
     await page.getByRole("button", { name: "Generate canvas" }).click();
 

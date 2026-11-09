@@ -13,6 +13,8 @@ const ROWS: Row[] = [
   ...SECTIONS.flatMap((s) => s.fields),
 ];
 
+const REQUIRED_TOTAL = ROWS.filter((row) => row.required).length;
+
 function show(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) return value.length ? value.join(", ") : null;
   return value ? value : null;
@@ -28,9 +30,15 @@ export function CanvasPanel({
   onGenerate?: () => void;
 }) {
   const remaining = canvas.missing_required.length;
+  const answered = Math.min(REQUIRED_TOTAL, Math.max(0, REQUIRED_TOTAL - remaining));
+  const percent = canvas.ready_for_review ? 100 : Math.round((answered / REQUIRED_TOTAL) * 100);
   return (
     <section aria-labelledby="canvas-heading" className="canvas-panel card">
       <h2 id="canvas-heading">Your canvas so far</h2>
+      {/* Decorative: the sentence below says the same in words. */}
+      <div className="canvas-panel__bar" aria-hidden="true">
+        <span style={{ width: `${percent}%` }} />
+      </div>
       <p data-testid="canvas-progress" role="status">
         {canvas.ready_for_review
           ? "Ready for review: every required answer is in."
@@ -43,20 +51,23 @@ export function CanvasPanel({
           Generate canvas
         </button>
       )}
-      <dl>
-        {ROWS.map((row) => {
-          const value = show(canvas.fields[row.id]);
-          return (
-            <div key={row.id} className="canvas-panel__row" data-testid={`canvas-${row.id}`}>
-              <dt>
-                {row.label}
-                {!row.required && <span className="canvas-panel__optional"> (optional)</span>}
-              </dt>
-              <dd className={value ? undefined : "canvas-panel__empty"}>{value ?? "Not answered yet"}</dd>
-            </div>
-          );
-        })}
-      </dl>
+      {/* A small box that scrolls. Focusable and labelled so keyboard users can scroll it too. */}
+      <div className="canvas-panel__scroll" role="region" aria-label="Canvas fields so far" tabIndex={0}>
+        <dl>
+          {ROWS.map((row) => {
+            const value = show(canvas.fields[row.id]);
+            return (
+              <div key={row.id} className="canvas-panel__row" data-testid={`canvas-${row.id}`}>
+                <dt>
+                  {row.label}
+                  {!row.required && <span className="canvas-panel__optional"> (optional)</span>}
+                </dt>
+                <dd className={value ? undefined : "canvas-panel__empty"}>{value ?? "Not answered yet"}</dd>
+              </div>
+            );
+          })}
+        </dl>
+      </div>
     </section>
   );
 }

@@ -4,8 +4,10 @@ Turns what a user says into canvas fields and asks for what is missing, **one qu
 turn**. Code: `backend/app/interview/`. It plugs into the conversation stream
 ([conversation.md](conversation.md)) and adds no new endpoint: `GET /api/conversation` now also
 returns the draft as `canvas: {fields, missing_required, ready_for_review}` and the interview's
-position as `progression` (below), and the conversation screen shows the draft beside the
-transcript.
+position as `progression` (below). The conversation screen is one centred column: only the chat
+box at the start; once the first answer is in, **Your canvas so far** (a progress bar and a small,
+keyboard-scrollable box of the fields) appears below the chat, and while the canvas is unfinished the
+**Save your progress** card ([downloads.md](downloads.md)) sits beside it (below it on a phone).
 
 ## How a turn works
 
