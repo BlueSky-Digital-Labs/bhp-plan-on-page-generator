@@ -59,8 +59,10 @@ bedrock_log_error_text    service        false                    Log the short 
                                                                   validation errors. Test only: it
                                                                   can quote request content.
 bedrock_region            service        region                   Must equal region.
-app_name                  service        SCP AI Ideation assistant           On-screen name, 1 to 80 chars.
-header_text               service        SCP AI Ideation assistant           Text beside the logo.
+app_name                  service        SCP AI Ideation          On-screen name, 1 to 80 chars.
+                                         assistant
+header_text               service        SCP AI Ideation          Text beside the logo.
+                                         assistant
 footer_text               service        BHP                      Footer text.
 alarm_email               service        none (prod: required)    Alarm and budget recipient.
                                                                   Minimal: alarms, topic and budget
