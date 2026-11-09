@@ -127,12 +127,15 @@ def test_confirmations_belong_to_one_session(world):
 
 
 @pytest.mark.parametrize(("name", "get"), DOCUMENTS, ids=IDS)
-def test_no_document_is_made_until_the_user_confirms(world, name, get):
+def test_a_finished_canvas_can_be_saved_without_confirming_and_is_not_marked_draft(
+    world, name, get
+):
     wire(world)
     client = browser(world)
-    finish(client)
+    finish(client)  # complete, but never confirmed: saving your own work does not need it
     response = get(client)
-    assert response.status_code == 409 and error_code(response) == "not_confirmed"
+    assert response.status_code == 200
+    assert "-draft" not in response.headers["content-disposition"]
 
 
 @pytest.mark.parametrize(("name", "get"), DOCUMENTS, ids=IDS)
@@ -203,8 +206,10 @@ def test_a_later_answer_ends_the_confirmation_at_once_and_a_new_one_is_needed(wo
             break
         answer = "Use the new one." if "Which one should I use" in reply else answer_for(reply)
         reply, latest = say(client, answer)  # the amendment contradicted an earlier answer
-    assert latest["confirmed_revision"] != latest["revision"]
-    assert canvas_file(client, "pdf").status_code == 409
+    assert (
+        latest["confirmed_revision"] != latest["revision"]
+    )  # the old confirmation did not carry over
+    assert canvas_file(client, "pdf").status_code == 200  # saving needs none; emailing still does
     assert confirm(client).status_code == 200
     assert canvas_file(client, "pdf").status_code == 200
 

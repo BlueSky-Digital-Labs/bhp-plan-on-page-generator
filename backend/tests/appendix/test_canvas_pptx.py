@@ -140,15 +140,25 @@ def canvas_file(client, fmt="pptx", revision=None):
     return client.get("/api/canvas-file", params={"format": fmt, "revision": revision})
 
 
-def test_an_incomplete_canvas_cannot_be_downloaded_as_a_deck(world):
+def test_with_nothing_answered_there_is_nothing_to_download(world):
     wire(world)
     client = browser(world)
-    assert canvas_file(client).status_code == 409
-    from tests.interview.test_interview_api import say
-
-    say(client, OPENING)
     response = canvas_file(client)
-    assert response.status_code == 409 and response.json()["error"]["code"] == "canvas_not_ready"
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "nothing_to_download"
+
+
+@pytest.mark.parametrize("fmt", ["pdf", "pptx"])
+def test_an_unfinished_canvas_downloads_as_a_draft_with_the_answers_so_far(world, fmt):
+    from tests.interview.test_interview_api import history, say
+
+    wire(world)
+    client = browser(world)
+    say(client, OPENING)
+    assert history(client)["canvas"]["ready_for_review"] is False
+    response = canvas_file(client, fmt)
+    assert response.status_code == 200 and response.content
+    assert "-canvas-draft-r" in response.headers["content-disposition"]
 
 
 def test_a_ready_canvas_downloads_as_a_deck_matching_the_stored_draft(world):
@@ -194,4 +204,4 @@ def test_the_appendix_routes_are_unaffected(world, fmt):
     wire(world)
     client = browser(world)
     finish(client)
-    assert _appendix(client, fmt).status_code == 409  # not confirmed yet
+    assert _appendix(client, fmt).status_code == 200  # no confirmation needed to save it

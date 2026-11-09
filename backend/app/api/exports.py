@@ -27,6 +27,7 @@ DOWNLOAD_FAILURES = {
     ),
     "not_confirmed": (409, "not_confirmed", "Confirm the canvas first."),
     "changed": (409, "conversation_changed", "Your conversation changed. Please try again."),
+    "nothing_yet": (409, "nothing_to_download", "Answer at least one question first."),
 }
 
 
@@ -47,6 +48,24 @@ def confirmed_snapshot(
         return service.confirmed_snapshot(session, revision)
     except AppendixError as exc:
         raise problem(exc) from None
+
+
+def downloadable_snapshot(
+    service: ConversationService, session: Session, revision: int
+) -> ExportSnapshot:
+    """The canvas for a download: the current revision, finished or an unfinished draft the user is
+    saving to carry on later. No confirmation is needed to keep your own work."""
+    try:
+        return service.downloadable_snapshot(session, revision)
+    except AppendixError as exc:
+        raise problem(exc) from None
+
+
+def ensure_still_current(service: ConversationService, session: Session, revision: int) -> None:
+    """Checked again after the file is built and before it is sent, so an answer that arrived
+    meanwhile cannot let an obsolete canvas through."""
+    if not service.still_current(session, revision):
+        raise problem(AppendixError("stale"))
 
 
 def ensure_still_confirmed(service: ConversationService, session: Session, revision: int) -> None:
@@ -77,7 +96,8 @@ def appendix_bytes(
 
 def document_filename(snapshot: ExportSnapshot, kind: str, ext: str) -> str:
     stem = safe_filename_stem(str(snapshot.canvas.get("solutionName") or ""))
-    return f"{stem}-{kind}-r{snapshot.revision}.{ext}"  # ASCII letters, digits and hyphens
+    draft = "" if snapshot.complete else "-draft"  # so a saved, unfinished file is recognisable
+    return f"{stem}-{kind}{draft}-r{snapshot.revision}.{ext}"  # ASCII letters, digits and hyphens
 
 
 def delivery_recorder(

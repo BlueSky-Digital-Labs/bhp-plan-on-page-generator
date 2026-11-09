@@ -10,7 +10,12 @@ from email.message import EmailMessage
 from typing import Protocol
 
 MAX_RECIPIENTS = 5
-MAX_NOTE_CHARS = 2_000
+MAX_BODY_CHARS = 500  # the fixed text of the submission email
+# What the email says unless the operator sets other text (see mailer/settings.py).
+DEFAULT_BODY = (
+    "SCP AI Ideation assistant submits a one page canvas for job development "
+    "and with the 2 attachments"
+)
 MAX_BYTES = 10 * 1024 * 1024  # the two PDFs together; SES itself allows far more
 _SUBJECT_NAME_CHARS = 80
 
@@ -95,27 +100,25 @@ def single_line(value: str, limit: int) -> str:
     return _CONTROL.sub(" ", value).strip()[:limit].strip()
 
 
+def clean_body(text: str) -> str:
+    """The email's text: line breaks kept, control characters removed, bounded. Plain text only."""
+    text = _BODY_CONTROL.sub("", text.replace("\r\n", "\n").replace("\r", "\n")).strip()
+    return text[:MAX_BODY_CHARS].strip()
+
+
 def compose(
     recipients: tuple[str, ...],
     solution_name: str,
-    note: str,
+    body: str,
     attachments: tuple[Attachment, ...],
     app_name: str = "Plan on a Page",
 ) -> OutgoingEmail:
-    """The email for a confirmed canvas. The note is the sender's own and is clearly marked."""
+    """The submission email for a confirmed canvas: a fixed subject naming the solution, the
+    configured text as the whole body, and the attachments. Nothing the user typed is in it."""
     name = single_line(solution_name, _SUBJECT_NAME_CHARS)
     subject = f"{app_name}: {name}" if name else app_name
-    about = f" for “{name}”" if name else ""
-    lines = [
-        f"The canvas{about} from {app_name} is attached, with its appendix.",
-        "",
-        *(f"  - {a.filename}" for a in attachments),
-    ]
-    note = _BODY_CONTROL.sub("", note.replace("\r\n", "\n").replace("\r", "\n")).strip()
-    if note:
-        lines += ["", "Message from the sender:", "", note]
-    lines += ["", f"Sent from {app_name}."]
-    return OutgoingEmail(recipients, subject, "\n".join(lines) + "\n", attachments)
+    text = clean_body(body) or DEFAULT_BODY
+    return OutgoingEmail(recipients, subject, text + "\n", attachments)
 
 
 def to_mime(sender: str, email: OutgoingEmail) -> bytes:

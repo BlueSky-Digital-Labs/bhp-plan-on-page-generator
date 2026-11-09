@@ -30,6 +30,12 @@ from app.interview.store import InMemoryInterviewStore, InterviewStoreBase
 from app.logging_config import configure_logging
 from app.mailer import SesMailer, UnavailableMailer, build_ses_client
 from app.mailer.service import MailService
+from app.mailer.settings import (
+    NoSubmitSettings,
+    ParameterStoreSubmitSettings,
+    StaticSubmitSettings,
+    build_ssm_client,
+)
 from app.middleware import RequestContextMiddleware
 
 
@@ -110,16 +116,35 @@ class DiscardingMailer:
         return None
 
 
+def _submit_source(settings: Settings, domains: tuple[str, ...]):
+    """Where the recipient and text come from: Parameter Store in AWS, fixed values otherwise."""
+    if settings.email_recipient_parameter:
+        return ParameterStoreSubmitSettings(
+            build_ssm_client(settings.aws_region),
+            settings.email_recipient_parameter,
+            settings.email_body_parameter,
+            domains,
+        )
+    recipient = settings.email_recipient
+    if not recipient and settings.email_delivery == "test":
+        recipient = "submissions@example.com"  # presentation tests only: the mailer drops it
+    if recipient:
+        return StaticSubmitSettings(recipient, settings.email_body or "", domains)
+    return NoSubmitSettings()
+
+
 def _build_mail(settings: Settings) -> MailService:
-    # Fails at startup (ConfigError, from Settings) when `ses` lacks a sender or allowed domains.
+    # Fails at startup (ConfigError, from Settings) when `ses` lacks a sender, allowed domains or
+    # a recipient. A fixed recipient outside the allowed domains fails here too.
     domains = settings.allowed_email_domains
     if settings.email_delivery == "ses":
         client = build_ses_client(settings.ses_region or settings.aws_region)
         sender = settings.email_sender_address or ""
-        return MailService(SesMailer(client, sender, settings.email_configuration_set), domains)
+        mailer = SesMailer(client, sender, settings.email_configuration_set)
+        return MailService(mailer, _submit_source(settings, domains))
     if settings.email_delivery == "test":
-        return MailService(DiscardingMailer(), domains)
-    return MailService(UnavailableMailer(), domains)
+        return MailService(DiscardingMailer(), _submit_source(settings, domains))
+    return MailService(UnavailableMailer(), NoSubmitSettings())
 
 
 def create_app(

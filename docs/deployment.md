@@ -358,6 +358,14 @@ SNS, CloudWatch alarm, Budgets, autoscaling and Route 53 permissions are **full-
      it to that log line as `error_text` (the role, the action, the resource and whether a service
      control policy denied it). It can include an address, so it is for the test deployment only:
      unset it afterwards.
+   * **Email submissions (optional).** With `ENABLE_EMAIL=true` the deploy also needs `SES_IDENTITY_ARN`,
+     `EMAIL_SENDER_ADDRESS` and `EMAIL_ALLOWED_DOMAINS` (the domain the recipient must be on, for
+     example `bhp.com`). The recipient and text are **not** deploy settings: they are two Parameter
+     Store strings, `/plan-<env>/email-recipient` (required) and `/plan-<env>/email-body` (optional),
+     created by hand and tagged like the other parameters, because the stacks do not own them.
+     Edit either in the console or with `aws ssm put-parameter --overwrite`: the app uses the new
+     value within a minute, with no deploy. Until the recipient exists, the Submit by email button
+     says it is not switched on. See [email.md](email.md).
 5. **Deploy the GitHub trust stack once** (administrator, by hand):
    ```bash
    cd infra && npx aws-cdk@2.1147.0 deploy plan-github-oidc

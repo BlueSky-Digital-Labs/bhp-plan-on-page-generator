@@ -7,17 +7,17 @@ Code: `backend/app/appendix/`, route: `backend/app/api/appendix.py`.
 ## Download
 
 `GET /api/appendix?format=pdf|docx|json&revision=N` (the caller's own session; no CSRF token, it
-changes nothing). `revision` is required and must be the current, **confirmed** revision (see
-"Read-back and confirmation" below). The file is built on every request from what the server has
+changes nothing). `revision` is required and must be the current revision. It may be an unfinished
+**draft** (marked as such, see [downloads.md](downloads.md)); only emailing needs the confirmed one
+(see "Read-back and confirmation" below). The file is built on every request from what the server has
 stored and is **never kept**. The file name is the solution name, made safe, plus the kind and
 revision, for example `shift-notes-assistant-appendix-r12.pdf`.
 
 | | |
 | --- | --- |
 | `200` | The file, as an attachment named `plan-on-a-page-appendix.<ext>`, `Cache-Control: no-store`, and `X-Appendix-Revision` (the conversation revision it was built from). |
-| `409 canvas_not_ready` | The server's validator does not call the canvas ready (see below), or no interviewer is attached. |
+| `409 nothing_to_download` | No answer is in yet, so there is nothing to save. |
 | `409 turn_in_progress` | The assistant has not finished replying, so the draft may be about to change. |
-| `409 not_confirmed` | The user has not confirmed this revision. |
 | `409 revision_conflict` | `revision` is not the current one (an answer arrived since it was shown), or one arrived while the file was being built. |
 | `409 conversation_changed` | An answer arrived while the copy was being taken twice in a row. Try again. |
 | `401` | No valid session. Another session's appendix can never be requested. |
@@ -78,17 +78,18 @@ correct it"); there is no separate editor.
   `confirmed_revision`. It counts only while it equals `revision`. Any later answer moves
   `revision` on, so it ends the confirmation at once; the user must read it back and confirm
   again. No history of old versions is kept.
-* **Every document download requires the current, confirmed revision**, checked on the server,
-  and checked again just before the file is sent so an answer that arrived while it was built
-  cannot let an obsolete canvas through. The page shows the download buttons only for a confirmed
-  revision, and re-reads the review straight after any refusal.
+* **Every document download requires the current revision**, checked on the server, and checked
+  again just before the file is sent so an answer that arrived while it was built cannot let an
+  obsolete canvas through. Confirmation is **not** needed to save your own work, finished or not;
+  **emailing** still needs the complete, confirmed revision. The review page shows the download
+  buttons only for a confirmed revision, and re-reads the review straight after any refusal; the
+  conversation screen offers draft downloads while the canvas is unfinished.
 
 ## The one-page canvas as PDF or PowerPoint
 
 `GET /api/canvas-file?format=pdf|pptx&revision=N` (`backend/app/canvas_export.py`). The **PDF is
 built on the server** (one A4 landscape page, vector text, drawn like the on-screen canvas), and the
-PowerPoint is one editable 16:9 slide. Same rules as the appendix: own session, confirmed current
-revision only, built per request in memory (no temporary files), never kept, `Cache-Control:
+PowerPoint is one editable 16:9 slide. Same rules as the appendix: own session, current revision only, built per request in memory (no temporary files), never kept, `Cache-Control:
 no-store`, attachment with a safe file name. A render failure is a content-free `500` with
 guidance on screen and no file; the confirmation and the answers are untouched, so the user can
 retry. Text shrinks to fit each panel (down to 5.5 pt); if even that is not enough, the longest
@@ -113,7 +114,7 @@ both have been downloaded, in any format, for the current version; see [download
 ## Sending by email
 
 The confirmed canvas and this appendix can also be emailed as two PDFs from the review page; see
-[email.md](email.md). It uses the same confirmation gate as the downloads.
+[email.md](email.md). Unlike the downloads, it needs the complete, confirmed canvas.
 
 ## Limits
 

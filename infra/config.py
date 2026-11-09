@@ -229,6 +229,16 @@ class Config:
         )
 
     @property
+    def email_recipient_parameter(self) -> str:
+        """Who a submission goes to. A plain String parameter the operator edits; not in a stack."""
+        return f"/{self.prefix}/email-recipient"
+
+    @property
+    def email_body_parameter(self) -> str:
+        """What the submission email says. Optional: the app has a built-in default."""
+        return f"/{self.prefix}/email-body"
+
+    @property
     def prefix(self) -> str:
         return f"plan-{self.env_name}"
 

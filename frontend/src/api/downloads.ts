@@ -7,6 +7,8 @@ export interface DownloadStatus {
   appendix_downloaded: boolean;
   purge_eligible: boolean;
   lock_reason: string | null;
+  // False while the canvas is an unfinished draft the user is saving to carry on later.
+  complete: boolean;
 }
 
 // Which of the two documents the server has finished sending (in any format) for the current revision.

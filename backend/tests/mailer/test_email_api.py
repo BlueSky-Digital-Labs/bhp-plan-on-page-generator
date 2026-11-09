@@ -9,9 +9,10 @@ from email import policy
 import pytest
 
 from app.api import mail as mail_routes
-from app.mailer import MailerError
+from app.mailer import DEFAULT_BODY, MailerError
 from app.mailer.limits import SendLimiter
 from app.mailer.service import MailService
+from app.mailer.settings import NoSubmitSettings, StaticSubmitSettings
 from tests.access.conftest import csrf
 from tests.appendix.test_appendix_api import confirm, finish, finish_confirmed
 from tests.interview.conftest import OPENING, browser
@@ -36,15 +37,16 @@ class RecordingMailer:
         self.sent.append(outgoing)
 
 
-def mailing(world, mailer=None, domains=(), limiter=None):
+def mailing(world, mailer=None, domains=(), limiter=None, submit=None):
     mailer = mailer or RecordingMailer()
-    world.mail = MailService(mailer, tuple(domains), limiter or SendLimiter(clock=world.clock))
+    submit = submit or StaticSubmitSettings("a@example.com", "", tuple(domains))
+    world.mail = MailService(mailer, submit, limiter or SendLimiter(clock=world.clock))
     return mailer
 
 
-def send(client, revision=None, to=("a@example.com",), message="", headers=None, **extra):
+def send(client, revision=None, headers=None, **extra):
     revision = history(client)["revision"] if revision is None else revision
-    body = {"revision": revision, "to": list(to), "message": message, **extra}
+    body = {"revision": revision, **extra}
     return client.post(
         "/api/email", json=body, headers=csrf(client) if headers is None else headers
     )
@@ -65,15 +67,15 @@ def ready_client(world, mailer=None, **kwargs):
 # --- what is sent -----------------------------------------------------------------------------------
 
 
-def test_both_documents_are_built_as_pdfs_and_sent_to_the_recipients_with_the_note(world):
+def test_both_documents_are_built_as_pdfs_and_sent_to_the_one_configured_recipient(world):
     client, mailer = ready_client(world)
     revision = history(client)["revision"]
-    response = send(client, to=("a@example.com", "b@example.org"), message="Please take a look.")
-    assert response.status_code == 200 and response.json() == {"sent": 2}
+    response = send(client)
+    assert response.status_code == 200 and response.json() == {"sent": 1}
     assert response.headers["cache-control"] == "no-store"
     (out,) = mailer.sent
-    assert out.recipients == ("a@example.com", "b@example.org")
-    assert "Please take a look." in out.body
+    assert out.recipients == ("a@example.com",)
+    assert out.body == DEFAULT_BODY + "\n"
     names = [a.filename for a in out.attachments]
     assert names[0].endswith(f"-canvas-r{revision}.pdf") and names[1].endswith(
         f"-appendix-r{revision}.pdf"
@@ -83,6 +85,15 @@ def test_both_documents_are_built_as_pdfs_and_sent_to_the_recipients_with_the_no
     )
     assert out.attachments[0].content != out.attachments[1].content
     assert out.subject.startswith("Plan on a Page: ")
+
+
+def test_the_text_and_recipient_are_whatever_the_settings_say_right_now(world):
+    client, mailer = ready_client(
+        world, submit=StaticSubmitSettings("team@example.com", "Submitted for job development.")
+    )
+    assert send(client).status_code == 200
+    assert mailer.sent[0].recipients == ("team@example.com",)
+    assert mailer.sent[0].body == "Submitted for job development.\n"
 
 
 def test_the_attached_documents_are_the_same_ones_the_download_buttons_give(world):
@@ -101,71 +112,45 @@ def test_nothing_is_kept_by_sending(world):
     assert history(client) == before
 
 
-def test_the_message_can_be_left_out(world):
-    client, mailer = ready_client(world)
-    assert send(client, message="").status_code == 200
-    assert "Message from the sender" not in mailer.sent[0].body
-
-
-def test_repeated_addresses_are_sent_once(world):
-    client, mailer = ready_client(world)
-    response = send(client, to=("a@example.com", " A@Example.com "))
-    assert response.json() == {"sent": 1} and mailer.sent[0].recipients == ("a@example.com",)
-
-
-# --- who it can go to -------------------------------------------------------------------------------
+# --- the browser cannot choose anything ----------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    "bad",
+    "extra",
     [
-        "nope",
-        "a@b",
-        "Bob <b@example.com>",
-        "a@example.com\nBcc: x@example.net",
-        "",
-        "тест@example.com",
+        {"to": ["boss@evil.example"]},
+        {"message": "hello"},
+        {"cc": ["c@example.com"]},
+        {"from": "boss@example.com"},
+        {"to": ["a@example.com"], "message": ""},
     ],
 )
-def test_an_address_that_is_not_plain_is_refused_and_nothing_is_built(world, monkeypatch, bad):
+def test_no_recipient_text_or_sender_can_be_supplied_and_nothing_is_built(
+    world, monkeypatch, extra
+):
     client, mailer = ready_client(world)
     built = []
     monkeypatch.setattr(mail_routes, "render_canvas_pdf", lambda c: built.append(c) or b"%PDF")
-    response = send(client, to=(bad,))
-    assert response.status_code == 422 and code(response) in (
-        "invalid_recipient",
-        "invalid_request",
-    )
-    assert bad.strip() == "" or bad not in response.text
+    response = send(client, **extra)
+    assert response.status_code == 422
+    assert "evil" not in response.text and not mailer.sent and not built
+
+
+def test_the_revision_is_the_only_thing_the_request_needs(world):
+    client, mailer = ready_client(world)
+    revision = history(client)["revision"]
+    response = client.post("/api/email", json={"revision": revision}, headers=csrf(client))
+    assert response.status_code == 200 and len(mailer.sent) == 1
+    assert client.post("/api/email", json={}, headers=csrf(client)).status_code == 422
+
+
+def test_without_a_recipient_it_says_so_at_once_and_builds_nothing(world, monkeypatch):
+    client, mailer = ready_client(world, submit=NoSubmitSettings())
+    built = []
+    monkeypatch.setattr(mail_routes, "render_canvas_pdf", lambda c: built.append(c) or b"%PDF")
+    response = send(client)
+    assert response.status_code == 503 and code(response) == "email_unavailable"
     assert not mailer.sent and not built
-
-
-def test_a_list_must_be_one_to_five_addresses(world):
-    client, mailer = ready_client(world)
-    assert send(client, to=()).status_code == 422
-    assert send(client, to=[f"u{i}@example.com" for i in range(6)]).status_code == 422
-    assert not mailer.sent
-    assert send(client, to=[f"u{i}@example.com" for i in range(5)]).status_code == 200
-
-
-def test_only_allowed_domains_receive_and_the_refusal_does_not_echo_the_address(world):
-    client, mailer = ready_client(world, domains=("example.com",))
-    response = send(client, to=("someone@example.com", "outsider@evil.example"))
-    assert response.status_code == 422 and code(response) == "recipient_not_allowed"
-    assert "evil" not in response.text and "outsider" not in response.text
-    assert not mailer.sent
-    assert send(client, to=("Someone@EXAMPLE.com",)).status_code == 200
-
-
-def test_the_note_is_limited_and_unknown_fields_are_refused(world):
-    client, mailer = ready_client(world)
-    assert send(client, message="x" * 2001).status_code == 422
-    assert send(client, message="x" * 2000).status_code == 200
-    assert (
-        send(client, **{"from": "boss@example.com"}).status_code == 422
-    )  # the sender is not chosen here
-    assert send(client, cc=["c@example.com"]).status_code == 422
-    assert len(mailer.sent) == 1
 
 
 # --- when it may be sent ----------------------------------------------------------------------------
@@ -295,9 +280,9 @@ def test_each_failure_has_fixed_guidance_and_does_not_use_up_the_allowance(
 ):
     mailer = RecordingMailer(fail=failure)
     client, _ = ready_client(world, mailer, limiter=SendLimiter(per_session=1, clock=world.clock))
-    response = send(client, message="SECRET-NOTE", to=("who@example.com",))
+    response = send(client)
     assert response.status_code == status and code(response) == expected
-    assert "SECRET-NOTE" not in response.text and "who@example.com" not in response.text
+    assert "a@example.com" not in response.text
     mailer.fail = None
     assert send(client).status_code == 200  # still allowed: the failed attempt did not count
 
@@ -337,7 +322,7 @@ def test_a_failed_render_gives_guidance_and_sends_nothing(world, monkeypatch):
     assert "SECRET-IDEA-TEXT" not in response.text and not mailer.sent
 
 
-def test_sending_is_logged_without_addresses_or_text(world):
+def test_sending_is_logged_without_the_address(world):
     records: list[logging.LogRecord] = []
 
     class Collect(logging.Handler):
@@ -349,19 +334,19 @@ def test_sending_is_logged_without_addresses_or_text(world):
     handler = Collect()
     logger.addHandler(handler)
     try:
-        send(client, to=("private.person@example.com",), message="SECRET-NOTE")
+        send(client)
     finally:
         logger.removeHandler(handler)
     assert [r.getMessage() for r in records] == ["email_sent"]
     text = repr([r.__dict__ for r in records])
-    assert "private" not in text and "SECRET-NOTE" not in text and "example.com" not in text
+    assert "a@example.com" not in text and "example.com" not in text
 
 
 def test_the_raw_message_for_a_real_send_is_well_formed(world):
     from app.mailer import to_mime
 
     client, mailer = ready_client(world)
-    send(client, to=("a@example.com",), message="Hello")
+    send(client)
     message = email.message_from_bytes(
         to_mime("noreply@example.com", mailer.sent[0]), policy=policy.default
     )

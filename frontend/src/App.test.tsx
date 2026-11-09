@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -70,6 +70,16 @@ describe("entry route /", () => {
     render(<App />);
     expect(await screen.findByLabelText("Access code")).toBeInTheDocument();
     expect(startButton()).not.toBeInTheDocument();
+  });
+
+  it("tells someone whose session was stopped halfway how to carry on, and shows nothing from it", async () => {
+    mockApi({ "GET /api/access-state": NOT_PERMITTED });
+    window.history.replaceState({ notice: "session_stopped" }, "", "/");
+    render(<App />);
+    expect(await screen.findByLabelText("Access code")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Your session was stopped and everything on the server was deleted. To carry on, enter the access code, start a new session and attach the file you downloaded to your first answer.",
+    );
   });
 
   it("sends a browser that already has access straight to /start", async () => {
@@ -493,42 +503,29 @@ describe("review route (read-back, confirmation and downloads)", () => {
     });
   });
 
-  describe("sending by email", () => {
-    // The toolbar button comes first on the page; the open form has a second one of the same name.
-    const mailButton = () => screen.queryAllByRole("button", { name: "Send email" })[0] ?? null;
-    const emailForm = () => screen.queryByRole("heading", { level: 2, name: "Send by email" });
-    // The form has its own "Send email" button; the one in the toolbar opens the form.
-    const submitEmail = () =>
-      userEvent.click(within(emailForm()!.closest("section")!).getByRole("button", { name: "Send email" }));
+  describe("submitting by email", () => {
+    const mailButton = () => screen.queryByRole("button", { name: /^(Submit by email|Submitting…)$/ });
 
     it("offers no email before the canvas is confirmed", async () => {
       await open({ "GET /api/conversation": review(3, null) });
       expect(mailButton()).not.toBeInTheDocument();
-      expect(emailForm()).not.toBeInTheDocument();
     });
 
-    it("offers it for the confirmed revision, and opens and closes the form without sending anything", async () => {
+    it("sends nothing until the button is clicked, and asks for nothing first", async () => {
       const { calls } = await open({ "GET /api/conversation": review(3, 3) });
-      expect(emailForm()).not.toBeInTheDocument();
-      await userEvent.click(mailButton()!);
-      expect(emailForm()).toBeInTheDocument();
-      expect(mailButton()).toHaveAttribute("aria-expanded", "true");
-      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-      expect(emailForm()).not.toBeInTheDocument();
-      expect(mailButton()).toHaveFocus();
+      expect(mailButton()).toBeInTheDocument();
+      expect(screen.queryByLabelText("To")).not.toBeInTheDocument();
       expect(calls.some((c) => c.key === "POST /api/email")).toBe(false);
     });
 
-    it("sends the confirmed revision and says who it went to", async () => {
+    it("submits the confirmed revision in one click and says it was sent", async () => {
       const { calls } = await open({
         "GET /api/conversation": review(3, 3),
         "POST /api/email": () => json({ sent: 1 }),
       });
       await userEvent.click(mailButton()!);
-      await userEvent.type(screen.getByLabelText("To"), "someone@example.com");
-      await submitEmail();
-      expect(await screen.findByText(/^Sent to someone@example.com/)).toBeInTheDocument();
-      expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/email")!.init?.body))).toMatchObject({ revision: 3 });
+      expect(await screen.findByText(/^Submitted by email\./)).toBeInTheDocument();
+      expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/email")!.init?.body))).toEqual({ revision: 3 });
     });
 
     it("re-reads the canvas and drops the email and download buttons when the confirmation no longer applies", async () => {
@@ -537,11 +534,8 @@ describe("review route (read-back, confirmation and downloads)", () => {
         "POST /api/email": () => envelope("revision_conflict", 409),
       });
       await userEvent.click(mailButton()!);
-      await userEvent.type(screen.getByLabelText("To"), "someone@example.com");
-      await submitEmail();
       expect(await screen.findByRole("alert")).toHaveTextContent("The canvas changed since it was shown");
       await waitFor(() => expect(mailButton()).not.toBeInTheDocument());
-      expect(emailForm()).not.toBeInTheDocument();
       expect(menus()).toHaveLength(0);
       expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument();
     });
@@ -552,8 +546,6 @@ describe("review route (read-back, confirmation and downloads)", () => {
         "POST /api/email": () => envelope("unauthenticated", 401),
       });
       await userEvent.click(mailButton()!);
-      await userEvent.type(screen.getByLabelText("To"), "someone@example.com");
-      await submitEmail();
       await waitFor(() => expect(window.location.pathname).toBe("/"));
     });
   });

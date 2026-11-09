@@ -166,6 +166,16 @@ jobs:
             --query '{deleted: DeletedParameters, not_found: InvalidParameters}' --output json)
           echo "Parameter Store, deleted and not found: ${result}"
 
+      # The email recipient and text are Parameter Store strings the operator sets by hand, so the
+      # stacks never owned them either, whichever secrets backend is used. Parameters already gone
+      # are reported, not an error.
+      - name: Delete the email settings parameters
+        run: |
+          result=$(aws ssm delete-parameters \
+            --names "/plan-${ENVIRONMENT}/email-recipient" "/plan-${ENVIRONMENT}/email-body" \
+            --query '{deleted: DeletedParameters, not_found: InvalidParameters}' --output json)
+          echo "Email settings, deleted and not found: ${result}"
+
       # Safety net: a Lambda-backed custom resource would leave a log group CloudFormation does
       # not own. The stacks currently have none, so this normally finds nothing. Best effort.
       - name: Remove leftover Lambda log groups

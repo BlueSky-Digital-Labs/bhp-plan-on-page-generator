@@ -19,6 +19,7 @@ async function mockDownloads(page: Page, canvas: boolean, appendix: boolean, rev
         appendix_downloaded: appendix,
         purge_eligible: canvas && appendix,
         lock_reason: canvas && appendix ? null : lock,
+        complete: true,
       },
     }),
   );
@@ -543,46 +544,91 @@ test.describe("one-page canvas", () => {
     await expect(page.getByRole("alert")).toContainText("The canvas is not complete yet"); // 422 from the real server
   });
 
-  test("email: the form asks for the addresses, sends the confirmed revision, and says who it went to", async ({ page }) => {
+  test("email: one click submits the confirmed revision, with no address or text to fill in", async ({ page }) => {
     await signInAndWait(page);
     await mockDownloads(page, true, true);
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
     let body: unknown = null;
     await page.route("**/api/email", (route) => {
       body = route.request().postDataJSON();
-      return route.fulfill({ json: { sent: 2 } });
+      return route.fulfill({ json: { sent: 1 } });
     });
     await page.goto("/review");
-    await page.getByRole("button", { name: "Send email" }).click();
-    const form = page.locator(".mail");
-    await expect(form.getByRole("heading", { name: "Send by email" })).toBeVisible();
-    await expect(form.getByLabel("To")).toBeFocused();
+    await expect(page.getByLabel("To")).toHaveCount(0); // nothing to type
+    expect(body).toBeNull(); // and nothing sent until the click
 
-    await form.getByLabel("To").fill("not an address");
-    await form.getByRole("button", { name: "Send email" }).click();
-    await expect(form.getByRole("alert")).toContainText("check the email addresses");
-    expect(body).toBeNull(); // nothing went to the server
-
-    await form.getByLabel("To").fill("a@example.com, b@example.org");
-    await form.getByLabel(/^Message/).fill("Please take a look.");
-    await form.getByRole("button", { name: "Send email" }).click();
-    await expect(form.getByRole("status")).toContainText("Sent to a@example.com, b@example.org");
-    expect(body).toEqual({ revision: READY.revision, to: ["a@example.com", "b@example.org"], message: "Please take a look." });
-    await form.getByRole("button", { name: "Done" }).click();
-    await expect(page.locator(".mail")).toHaveCount(0);
+    await page.getByRole("button", { name: "Submit by email" }).click();
+    await expect(page.locator(".mail").getByRole("status")).toContainText("Submitted by email");
+    expect(body).toEqual({ revision: READY.revision }); // only the revision goes to the server
   });
 
-  test("email: the real server says plainly that email is not switched on, before it builds anything", async ({ page }) => {
+  test("email: the real server says plainly that submitting is not switched on, before it builds anything", async ({ page }) => {
     await signInAndWait(page);
     await mockDownloads(page, true, true);
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
     await page.goto("/review");
-    await page.getByRole("button", { name: "Send email" }).click();
-    const form = page.locator(".mail");
-    await form.getByLabel("To").fill("someone@example.com");
-    await form.getByRole("button", { name: "Send email" }).click();
-    await expect(form.getByRole("alert")).toContainText("Email is not switched on yet"); // 503 email_unavailable
-    await expect(form.getByLabel("To")).toHaveValue("someone@example.com"); // nothing typed is lost
+    await page.getByRole("button", { name: "Submit by email" }).click();
+    await expect(page.locator(".mail").getByRole("alert")).toContainText("not switched on yet"); // 503 email_unavailable
+  });
+
+  test("saving halfway: download both files as they are, stop the session, and be told how to carry on", async ({ page }) => {
+    await signInAndWait(page);
+    const HALF = {
+      revision: 2,
+      turns: [
+        { turn_id: "1".repeat(32), role: "user", text: "We copy shift notes between spreadsheets.", status: "complete" },
+        { turn_id: "2".repeat(32), role: "assistant", text: "Which team?", status: "complete" },
+      ],
+      canvas: { fields: { solutionName: "Shift notes" }, missing_required: ["team", "priority"], ready_for_review: false },
+    };
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: HALF }));
+    await page.route("**/api/access-state", (route) => route.fulfill({ json: { start_permitted: false } }));
+    // The status follows what the server has sent; this stands in for its records.
+    let canvasSaved = false;
+    let appendixSaved = false;
+    await page.route("**/api/downloads", (route) =>
+      route.fulfill({
+        json: {
+          revision: HALF.revision,
+          canvas_downloaded: canvasSaved,
+          appendix_downloaded: appendixSaved,
+          purge_eligible: canvasSaved && appendixSaved,
+          lock_reason: canvasSaved && appendixSaved ? null : "both_not_downloaded",
+          complete: false,
+        },
+      }),
+    );
+    await page.route("**/api/canvas-file**", (route) => {
+      canvasSaved = true;
+      return route.fulfill({ body: "%PDF-", headers: { "Content-Disposition": 'attachment; filename="shift-notes-canvas-draft-r2.pdf"' } });
+    });
+    await page.route("**/api/appendix**", (route) => {
+      appendixSaved = true;
+      return route.fulfill({ body: "%PDF-", headers: { "Content-Disposition": 'attachment; filename="shift-notes-appendix-draft-r2.pdf"' } });
+    });
+    let purged: unknown = null;
+    await page.route("**/api/session/purge", (route) => {
+      purged = route.request().postDataJSON();
+      return route.fulfill({ status: 204 });
+    });
+    await page.goto("/conversation");
+
+    const card = page.locator(".dl");
+    await expect(card.getByRole("heading", { name: "Save your progress" })).toBeVisible();
+    await expect(card.getByRole("button", { name: /^Stop session/ })).toHaveCount(0); // locked until both are saved
+
+    await card.getByRole("button", { name: /Download canvas so far/ }).click();
+    await card.getByRole("menuitem", { name: "PDF" }).click();
+    await card.getByRole("button", { name: /Download appendix so far/ }).click();
+    await card.getByRole("menuitem", { name: "PDF" }).click();
+    await card.getByRole("button", { name: "Refresh status" }).click();
+
+    await card.getByRole("button", { name: /^Stop session/ }).click();
+    await expect(card.getByText(/attach one of the files you downloaded/)).toBeVisible();
+    await card.getByRole("button", { name: "Yes, stop and delete everything" }).click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("status")).toContainText("Your session was stopped");
+    expect(purged).toEqual({ revision: HALF.revision });
   });
 
   test("download status: each PDF is shown on its own, deleting stays locked until the server says both are done", async ({ page }) => {

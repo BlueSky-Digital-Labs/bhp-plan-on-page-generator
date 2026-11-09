@@ -9,6 +9,14 @@ shows it folded under the answer ("Attached file: idea.docx (1,234 characters)")
 Code: `backend/app/attachments/` (reading, markers), `backend/app/api/attachments.py` (route),
 `frontend/src/api/attachments.ts` and the composer in `ConversationScreen.tsx`.
 
+## Carrying on from a saved draft
+
+Someone who stopped halfway ([downloads.md](downloads.md)) starts a new session and attaches the
+canvas PDF (or the appendix) they downloaded to their first answer. It is read like any other file,
+so the assistant sees the answers so far and carries on with what is missing. A saved file marked
+"UNFINISHED DRAFT" works the same way as any PDF. As with every attachment, a file cannot set the
+priority or skip a question: only typed words can, so those are asked again.
+
 ## How it works
 
 1. `POST /api/attachments?name=<file name>` with the raw file as the body (session, same-origin

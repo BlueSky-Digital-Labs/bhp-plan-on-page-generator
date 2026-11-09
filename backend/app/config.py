@@ -76,6 +76,13 @@ class Settings(BaseSettings):
     email_allowed_domains: str = Field(default="", validate_default=True)  # comma-separated
     email_configuration_set: str | None = None
     ses_region: str | None = None  # the SES region, when it is not the app's own
+    # Who a submission goes to and what it says. In AWS these are the names of two Parameter Store
+    # parameters (plain strings, read at run time so they change without a deploy); locally they are
+    # fixed values. The one recipient must be on an allowed domain. The text has a built-in default.
+    email_recipient: str | None = None
+    email_body: str | None = None
+    email_recipient_parameter: str | None = Field(default=None, validate_default=True)
+    email_body_parameter: str | None = None
 
     @property
     def allowed_email_domains(self) -> tuple[str, ...]:
@@ -132,6 +139,29 @@ class Settings(BaseSettings):
         if info.data.get("email_delivery") == "ses" and not (value and is_address(value.strip())):
             raise ValueError("a plain email address is required for ses")
         return value.strip() if value else None
+
+    @field_validator("email_recipient_parameter", "email_body_parameter")
+    @classmethod
+    def _email_parameter_names(cls, value: str | None, info: ValidationInfo) -> str | None:
+        value = value.strip() if value else None
+        if value and not value.startswith("/"):
+            raise ValueError("must be a parameter name starting with /")
+        if (
+            info.field_name == "email_recipient_parameter"
+            and info.data.get("email_delivery") == "ses"
+            and not value
+            and not (info.data.get("email_recipient") or "").strip()
+        ):
+            raise ValueError("a recipient, or the parameter that holds it, is required for ses")
+        return value
+
+    @field_validator("email_recipient")
+    @classmethod
+    def _recipient_is_a_plain_address(cls, value: str | None) -> str | None:
+        value = value.strip() if value else None
+        if value and not is_address(value):
+            raise ValueError("must be a plain email address")
+        return value or None
 
     @field_validator("email_allowed_domains")
     @classmethod

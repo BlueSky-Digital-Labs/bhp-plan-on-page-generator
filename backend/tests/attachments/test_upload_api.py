@@ -195,3 +195,33 @@ def test_an_instruction_hidden_in_a_file_gets_the_same_treatment_as_typed_text()
         Extraction(), "Our idea is a shift notes tool.\n\n" + attached, InterviewState()
     )
     assert outcome.text.startswith("I can only help with completing the canvas.")
+
+
+# --- carrying on from a draft saved halfway -----------------------------------------------------------
+
+
+def test_a_draft_saved_halfway_can_be_attached_in_a_new_session_to_carry_on(world):
+    """Save the unfinished canvas and appendix, then read each back as an attachment in a new session:
+    the answers so far, and the 'UNFINISHED DRAFT' mark, come back as text the assistant can use."""
+    from tests.appendix.test_appendix_api import appendix
+    from tests.appendix.test_canvas_pptx import canvas_file
+    from tests.interview.test_interview_api import say
+
+    wire(world)
+    first = browser(world)
+    say(first, OPENING)
+    assert history(first)["canvas"]["ready_for_review"] is False
+    canvas_pdf = canvas_file(first, "pdf")
+    appendix_pdf = appendix(first, "pdf")
+    assert canvas_pdf.status_code == 200 and appendix_pdf.status_code == 200
+    assert "-canvas-draft-r" in canvas_pdf.headers["content-disposition"]
+
+    second = browser(world)  # a brand new session, as after stopping
+    assert history(second)["turns"] == []
+    read_canvas = upload(second, "idea-canvas-draft-r2.pdf", canvas_pdf.content)
+    assert read_canvas.status_code == 200 and read_canvas.json()["kind"] == "pdf"
+    assert "AI OPPORTUNITY CANVAS" in read_canvas.json()["block"]
+    read_appendix = upload(second, "idea-appendix-draft-r2.pdf", appendix_pdf.content)
+    assert read_appendix.status_code == 200
+    text = read_appendix.json()["block"]
+    assert "UNFINISHED DRAFT" in text and "three spreadsheets" in text  # the answer so far survives

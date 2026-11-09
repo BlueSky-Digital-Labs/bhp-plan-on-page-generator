@@ -12,10 +12,10 @@ import pytest
 
 from app.access.errors import DependencyUnavailable
 from tests.access.conftest import csrf
-from tests.appendix.test_appendix_api import appendix, finish, finish_confirmed
+from tests.appendix.test_appendix_api import appendix, finish_confirmed
 from tests.appendix.test_canvas_pptx import canvas_file
-from tests.interview.conftest import browser
-from tests.interview.test_interview_api import history, say, wire
+from tests.interview.conftest import OPENING, browser
+from tests.interview.test_interview_api import answer_for, history, say, wire
 
 pytestmark = pytest.mark.usefixtures("store_kind")
 
@@ -65,6 +65,7 @@ def test_status_follows_each_download_and_names_what_is_outstanding(world):
         "appendix_downloaded": False,
         "purge_eligible": False,
         "lock_reason": "both_not_downloaded",
+        "complete": True,
     }
     assert canvas_file(client, "pdf").status_code == 200
     got = status(client).json()
@@ -119,15 +120,60 @@ def test_downloading_again_changes_nothing(world):
     assert status(client).json() == first and first["purge_eligible"]
 
 
-def test_an_incomplete_canvas_is_locked_with_its_reason(world):
+def test_with_nothing_answered_there_is_nothing_to_save_and_no_deletion(world):
     wire(world)
     client = browser(world)
-    assert status(client).json()["lock_reason"] == "not_ready"
-    finish(client)
     got = status(client).json()
-    assert (
-        got["lock_reason"] == "not_confirmed" and not got["purge_eligible"]
-    )  # complete, unconfirmed
+    assert got["lock_reason"] == "not_ready" and not got["purge_eligible"]
+    assert purge(client).status_code == 409
+
+
+def test_an_unfinished_draft_is_saved_then_the_session_can_be_stopped(world):
+    wire(world)
+    client = browser(world)
+    say(client, OPENING)  # one answer in, the canvas still incomplete
+    assert history(client)["canvas"]["ready_for_review"] is False
+    got = status(client).json()
+    assert got["complete"] is False and got["lock_reason"] == "both_not_downloaded"
+    assert purge(client).status_code == 409  # nothing saved yet: still locked
+    assert canvas_file(client, "pdf").status_code == 200
+    assert status(client).json()["lock_reason"] == "appendix_not_downloaded"
+    assert appendix(client, "docx").status_code == 200  # any format counts
+    got = status(client).json()
+    assert got["purge_eligible"] and got["lock_reason"] is None and got["complete"] is False
+    session = session_of(world)
+    assert purge(client).status_code == 204
+    # the backend deletes everything, exactly as for a finished canvas, and ends the sign-in
+    assert world.conversation._store.history(session.session_id) == (0, [])
+    assert world.conversation._interview.get(session.session_id).canvas == {}
+    assert world.conversation._deliveries.get(session.session_id) == {}
+    assert session.session_id not in world.store.sessions
+    assert status(client).status_code in (401, 403)
+
+
+def test_an_answer_after_saving_a_draft_means_saving_again_before_stopping(world):
+    wire(world)
+    client = browser(world)
+    reply, _ = say(client, OPENING)
+    both_downloaded(client)
+    assert status(client).json()["purge_eligible"]
+    say(client, answer_for(reply))  # carried on after saving
+    got = status(client).json()
+    assert not got["purge_eligible"] and got["lock_reason"] == "both_not_downloaded"
+    assert purge(client).status_code == 409
+
+
+def test_the_unfinished_canvas_still_cannot_be_emailed(world):
+    from tests.mailer.test_email_api import mailing, send
+
+    wire(world)
+    mailer = mailing(world)
+    client = browser(world)
+    say(client, OPENING)
+    both_downloaded(client)  # saved as a draft
+    response = send(client)
+    assert response.status_code == 409 and code(response) == "canvas_not_ready"
+    assert not mailer.sent
 
 
 def test_an_amendment_resets_both_documents(world):

@@ -25,18 +25,22 @@ not count.
 `evaluate_gate` (`app/delivery/gate.py`) is the one rule, used both to show the status and again
 immediately before a deletion is accepted. Both documents count only if they were sent for the
 **current** revision, so an amendment resets both at once, and a completion that arrives late for an
-older revision can never unlock anything (its revision no longer matches). Eligibility also needs the
-canvas to be complete, the assistant's reply finished, and the current revision confirmed.
+older revision can never unlock anything (its revision no longer matches). Eligibility also needs at
+least one answer to be in and the assistant's reply to be finished. It does **not** need the canvas to
+be complete or confirmed: someone who cannot finish can save what they have and **stop** the session
+(see "Saving a draft and stopping" below). A finished canvas is simply the case where `complete` is true.
 
 `GET /api/downloads` (own session only, `Cache-Control: no-store`):
 
 ```json
 {"revision": 3, "canvas_downloaded": true, "appendix_downloaded": false,
- "purge_eligible": false, "lock_reason": "appendix_not_downloaded"}
+ "purge_eligible": false, "lock_reason": "appendix_not_downloaded", "complete": true}
 ```
 
-`lock_reason` is one of `not_ready`, `turn_in_progress`, `not_confirmed`, `canvas_not_downloaded`,
-`appendix_not_downloaded`, `both_not_downloaded`, or null when eligible.
+`lock_reason` is one of `not_ready` (nothing answered yet, so nothing to save), `turn_in_progress`,
+`canvas_not_downloaded`, `appendix_not_downloaded`, `both_not_downloaded`, or null when eligible.
+`complete` is true only when every required answer is in and the user confirmed this revision; it only
+chooses the wording on screen ("delete" or "stop").
 
 ## Deleting
 
@@ -54,9 +58,34 @@ draft, delivery records and cached overview, ends the sign-in session and clears
 Signing out (`DELETE /api/session`) is unchanged: it still deletes everything at once, with no
 download check. Whether sign-out should keep doing that is a product decision (see below).
 
+## Saving a draft and stopping
+
+Downloads no longer need the canvas to be finished or confirmed: the server serves the **current
+revision** as long as one answer is in and the assistant has finished replying
+(`downloadable_snapshot` in `app/conversation/service.py`). An unfinished canvas is a **draft**:
+
+* the files are named `...-canvas-draft-r<N>` and `...-appendix-draft-r<N>`;
+* the appendix says "UNFINISHED DRAFT" under its title (PDF, Word) or has `"draft": true` (JSON); the
+  one-page canvas keeps its design and shows "Not provided" for what is missing;
+* **emailing still needs a complete, confirmed canvas.** The Submit by email button is on the review
+  page only, and the route refuses an unfinished one (`canvas_not_ready`).
+
+On the conversation screen, once an answer is in and the canvas is not yet complete, a **Save your
+progress** card offers *Download canvas so far* and *Download appendix so far*. When the server says
+both were saved for the current revision, **Stop session** appears; after a confirmation it calls the
+same `POST /api/session/purge`, so the server deletes the conversation, draft and records and ends the
+sign-in, exactly as for a finished canvas. The entry page then explains how to carry on. Answering
+again after saving makes a new revision, so both documents must be saved again before stopping.
+
+**Carrying on later** uses the existing attach-a-file feature ([attachments.md](attachments.md)): in a
+new session the user attaches the downloaded canvas PDF or the appendix to their first answer, and the
+assistant reads it as if typed and asks for what is still missing. Nothing is stored for them
+meanwhile. The one-page canvas is the better file to attach: a long appendix can run past the 15,000
+character limit on attached text, which is cut at a word.
+
 ## On screen
 
-On the review page, once the canvas is confirmed, a **Your documents** card shows each document as
+On the review page, once the canvas is confirmed, a **Your documents** card (on the conversation screen, the **Save your progress** card, with its own wording) shows each document as
 "Downloaded" or "Not downloaded yet" (words and symbols, not colour alone), a locked explanation
 that names what is outstanding, guidance to save both documents, and a **Refresh status** button. The
 **Delete my session** button appears only when the server says both are done, and asks for one more

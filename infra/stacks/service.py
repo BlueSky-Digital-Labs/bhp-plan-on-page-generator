@@ -298,6 +298,20 @@ class ServiceStack(Stack):
         if cfg.enable_email:
             self.web_role.add_to_policy(
                 iam.PolicyStatement(
+                    sid="ReadEmailSettings",
+                    actions=["ssm:GetParameters"],
+                    resources=[
+                        self.format_arn(
+                            service="ssm",
+                            resource="parameter",
+                            resource_name=f"{self.prefix}/{name}",
+                        )
+                        for name in ("email-recipient", "email-body")
+                    ],
+                )
+            )
+            self.web_role.add_to_policy(
+                iam.PolicyStatement(
                     sid="SendFromOneAddress",
                     # The app sends a raw MIME message (to attach the PDFs); SES authorises that
                     # as ses:SendRawEmail as well as ses:SendEmail.
@@ -372,6 +386,9 @@ class ServiceStack(Stack):
             env["EMAIL_SENDER_ADDRESS"] = cfg.email_sender_address or ""
             env["EMAIL_ALLOWED_DOMAINS"] = ",".join(cfg.email_allowed_domains)
             env["SES_REGION"] = cfg.ses_region
+            # Read at run time, so the recipient and the text change without a deploy.
+            env["EMAIL_RECIPIENT_PARAMETER"] = cfg.email_recipient_parameter
+            env["EMAIL_BODY_PARAMETER"] = cfg.email_body_parameter
             if cfg.email_log_error_text:
                 env["EMAIL_LOG_ERROR_TEXT"] = "true"
         return env

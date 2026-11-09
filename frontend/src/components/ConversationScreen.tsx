@@ -17,6 +17,7 @@ import {
 } from "../api/attachments";
 import { CanvasPanel } from "./CanvasPanel";
 import { navigate, ROUTES } from "../router";
+import { SaveProgress } from "./SaveProgress";
 import { Loading } from "./Loading";
 
 const MAX_ANSWER_CHARS = 4000;
@@ -302,6 +303,12 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
   const visibleTurns = turns.filter((t) => t.role === "user" || t.status === "complete");
   const firstAnswer = turns.length === 0;
   const blocked = sending || streaming || Boolean(unfinished);
+  // Someone who cannot finish now may save what they have and stop: offered once there is at least
+  // one answer, while the canvas is still incomplete (a finished one goes to the review page).
+  const saveVisible =
+    !blocked &&
+    history?.canvas?.ready_for_review !== true &&
+    turns.some((t) => t.role === "user" && t.status === "complete");
   const submitMessage = submitError ? (SUBMIT_MESSAGES[submitError.code] ?? UNSURE_SAVED) : null;
 
   return (
@@ -486,6 +493,14 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
             </p>
           </div>
         </section>
+        {saveVisible && history && (
+          <SaveProgress
+            revision={history.revision}
+            onStopped={() => navigate(ROUTES.entry, { replace: true, notice: "session_stopped" })}
+            onAccessLost={onAccessLost}
+            onOutOfDate={() => void refresh()}
+          />
+        )}
       </div>
       <CanvasPanel canvas={history?.canvas} onGenerate={() => navigate(ROUTES.review)} />
     </div>

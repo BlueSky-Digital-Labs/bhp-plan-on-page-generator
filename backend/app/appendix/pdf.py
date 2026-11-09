@@ -3,6 +3,7 @@ from pathlib import Path
 from fpdf import FPDF
 
 from app.appendix.model import (
+    DRAFT_NOTE,
     INTRO,
     OVERVIEW_LABEL,
     OVERVIEW_NOTE,
@@ -71,6 +72,8 @@ def render_pdf(appendix: AppendixInput) -> bytes:
         size=9,
         colour=_MUTED,
     )
+    if appendix.draft:
+        pdf.text_block(DRAFT_NOTE, size=9, bold=True, colour=_ACCENT)
     pdf.text_block(SNAPSHOT_NOTE, size=9, colour=_MUTED)
     pdf.ln(4)
 

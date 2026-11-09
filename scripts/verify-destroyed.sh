@@ -28,6 +28,7 @@ done
 # no decryption. A principal without ssm:GetParameters cannot check; that is reported, not failed.
 if out=$(aws ssm get-parameters --region "$region" \
   --names "/plan-${env_name}/access-code-hash" "/plan-${env_name}/cookie-signing-key" \
+  "/plan-${env_name}/email-recipient" "/plan-${env_name}/email-body" \
   --query 'Parameters[].Name' --output text 2>&1); then
   if [ -n "$out" ]; then
     echo "STILL PRESENT: Parameter Store parameters: ${out}" >&2

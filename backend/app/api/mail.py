@@ -1,4 +1,8 @@
-"""Email the confirmed canvas and its appendix, both as PDFs the server builds itself."""
+"""Submit the confirmed canvas and its appendix by email, both as PDFs the server builds itself.
+
+The browser sends only the revision. The recipient and the text come from the server's settings
+(Parameter Store in AWS, so an operator can change them without a deploy); nobody using the app
+can choose an address or add text."""
 
 import logging
 from typing import Annotated
@@ -21,14 +25,7 @@ from app.canvas_export import render_canvas_pdf
 from app.config import Settings, get_settings
 from app.conversation.service import ConversationService
 from app.errors import ApiProblem
-from app.mailer import (
-    MAX_NOTE_CHARS,
-    MAX_RECIPIENTS,
-    Attachment,
-    MailerError,
-    clean_recipients,
-    compose,
-)
+from app.mailer import Attachment, MailerError, compose
 from app.mailer.limits import SendRefused
 from app.mailer.service import MailService
 
@@ -36,10 +33,6 @@ router = APIRouter()
 logger = logging.getLogger("app.mailer")
 
 # Fixed, content-free wording for every way a send can fail. Addresses are never echoed.
-_RECIPIENT_PROBLEMS = {
-    "invalid_recipient": (422, "Check the email addresses and try again."),
-    "recipient_not_allowed": (422, "One of those addresses cannot be used."),
-}
 _REFUSED = {
     "in_progress": (409, "send_in_progress", "An email is already being sent."),
     "limit": (429, "email_limit", "The number of emails allowed for this session has been used."),
@@ -61,12 +54,8 @@ def get_mail(request: Request) -> MailService:
 class EmailBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # The revision the user confirmed; nothing else can be sent.
+    # The revision the user confirmed; nothing else can be sent, and nothing else is accepted.
     revision: Annotated[int, Field(ge=0)]
-    to: Annotated[
-        list[Annotated[str, Field(max_length=254)]], Field(min_length=1, max_length=MAX_RECIPIENTS)
-    ]
-    message: Annotated[str, Field(max_length=MAX_NOTE_CHARS)] = ""
 
 
 @router.post("/email", dependencies=[Depends(require_csrf)])
@@ -77,18 +66,14 @@ def send_email(
     mail: Annotated[MailService, Depends(get_mail)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict:
-    """Builds the canvas and appendix PDFs for the confirmed revision and emails them.
+    """Builds the canvas and appendix PDFs for the confirmed revision and emails them to the one
+    configured recipient, with the configured text.
 
     Same gate as the downloads (current, complete and confirmed), checked again just before the
-    send. Only the configured sender is used, only to allowed recipient domains, and nothing is
-    stored.
+    send. Only the configured sender and recipient are used, and nothing is stored.
     """
-    try:
-        recipients = clean_recipients(body.to, mail.allowed_domains)
-    except ValueError as exc:
-        status, message = _RECIPIENT_PROBLEMS[str(exc)]
-        raise ApiProblem(status, str(exc), message) from None
-    if not mail.mailer.ready:
+    submit = mail.submit.current()
+    if submit is None or not mail.mailer.ready:
         raise ApiProblem(*_MAILER_FAILURES["unavailable"])
 
     try:
@@ -106,9 +91,9 @@ def send_email(
         appendix_pdf = appendix_bytes(service, session, snapshot, "pdf", settings.app_name)
         ensure_still_confirmed(service, session, body.revision)
         email = compose(
-            recipients,
+            (submit.recipient,),
             str(snapshot.canvas.get("solutionName") or ""),
-            body.message,
+            submit.body,
             (
                 Attachment(
                     document_filename(snapshot, "canvas", "pdf"), canvas_pdf, MEDIA_TYPES["pdf"]
@@ -126,5 +111,5 @@ def send_email(
         sent = True
     finally:
         mail.limiter.finish(session.session_id, session.expires_at, sent=sent)
-    logger.info("email_sent", extra={"detail": f"recipients={len(recipients)}"})
-    return {"sent": len(recipients)}
+    logger.info("email_sent", extra={"detail": "recipients=1"})
+    return {"sent": 1}

@@ -340,6 +340,31 @@ def test_bedrock_error_text_logging_is_off_unless_asked_for(m):
     assert warnings
 
 
+def test_the_recipient_and_text_are_read_from_two_parameters_at_run_time():
+    mail = {
+        "enable_email": "true",
+        "ses_identity_arn": "arn:aws:ses:ap-southeast-2:123456789012:identity/example.com",
+        "email_sender_address": "noreply@example.com",
+        "email_allowed_domains": "example.com",
+    }
+    s = minimal(**mail)
+    by_sid = {x["Sid"]: x for x in role_statements(s.service, "plan-test-web-task")}
+    read = by_sid["ReadEmailSettings"]
+    assert as_list(read["Action"]) == ["ssm:GetParameters"]
+    resources = json.dumps(read["Resource"])
+    assert resources.count("parameter/plan-test/email-recipient") == 1
+    assert resources.count("parameter/plan-test/email-body") == 1
+    assert "*" not in resources and len(as_list(read["Resource"])) == 2
+    env = env_of(container(s.service, "plan-test-web")[1])
+    assert env["EMAIL_RECIPIENT_PARAMETER"] == "/plan-test/email-recipient"
+    assert env["EMAIL_BODY_PARAMETER"] == "/plan-test/email-body"
+    sweeper = env_of(container(s.service, "plan-test-sweeper")[1])
+    assert "EMAIL_RECIPIENT_PARAMETER" not in sweeper
+    assert not any(a.startswith("ssm:") and "email" in a for a in role_actions(s.service, ROLES[1]))
+    off = {x["Sid"] for x in role_statements(minimal().service, "plan-test-web-task")}
+    assert "ReadEmailSettings" not in off
+
+
 def test_email_error_text_logging_is_off_unless_asked_for():
     mail = {
         "enable_email": "true",

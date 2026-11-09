@@ -11,9 +11,9 @@ from app.api.conversation import get_conversation
 from app.api.exports import (
     appendix_bytes,
     attachment,
-    confirmed_snapshot,
     delivery_recorder,
-    ensure_still_confirmed,
+    downloadable_snapshot,
+    ensure_still_current,
 )
 from app.appendix import MEDIA_TYPES, Format
 from app.config import Settings, get_settings
@@ -33,9 +33,9 @@ def download_appendix(
 ) -> Response:
     """The confirmed canvas's appendix. Built from this session's stored conversation on every
     request; nothing is kept."""
-    snapshot = confirmed_snapshot(service, session, revision)
+    snapshot = downloadable_snapshot(service, session, revision)
     content = appendix_bytes(service, session, snapshot, file_format, settings.app_name)
-    ensure_still_confirmed(service, session, revision)
+    ensure_still_current(service, session, revision)
     logger.info("appendix_downloaded", extra={"reason": file_format})
     recorder = delivery_recorder(service, session, "appendix", snapshot)
     return attachment(

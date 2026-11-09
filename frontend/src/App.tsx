@@ -73,6 +73,12 @@ function EntryRoute() {
             Your session was deleted. Nothing from it is kept. Enter the access code to start a new one.
           </p>
         )}
+        {readNotice() === "session_stopped" && (
+          <p role="status" className="notice">
+            Your session was stopped and everything on the server was deleted. To carry on, enter the access code, start a
+            new session and attach the file you downloaded to your first answer.
+          </p>
+        )}
         <AccessGate onAccepted={() => navigate(ROUTES.start)} />
       </>
     );

@@ -18,8 +18,19 @@ const created = (revision = 1) => () =>
 
 afterEach(() => vi.unstubAllGlobals());
 
+// The "save your progress" card reads the download status once an answer is in; most tests are not about it.
+const idleDownloads = () =>
+  json({
+    revision: 1,
+    canvas_downloaded: false,
+    appendix_downloaded: false,
+    purge_eligible: false,
+    lock_reason: "both_not_downloaded",
+    complete: false,
+  });
+
 function setup(routes: Parameters<typeof mockApi>[0]) {
-  const api = mockApi({ "GET /api/csrf": csrfRoute, ...routes });
+  const api = mockApi({ "GET /api/csrf": csrfRoute, "GET /api/downloads": idleDownloads, ...routes });
   const onAccessLost = vi.fn();
   const view = render(<ConversationScreen onAccessLost={onAccessLost} />);
   return { ...api, onAccessLost, ...view };
@@ -601,5 +612,43 @@ describe("attaching a file", () => {
     await typeAndSend("My idea");
     await waitFor(() => expect(screen.getByRole("button", { name: /Attach a file/ })).toBeDisabled());
     stream.end();
+  });
+});
+
+describe("saving progress to stop and carry on later", () => {
+  const incomplete = { fields: { team: "Ops" }, missing_required: ["priority"], ready_for_review: false };
+  const complete = { fields: { team: "Ops" }, missing_required: [], ready_for_review: true };
+  const card = () => screen.queryByRole("heading", { level: 2, name: "Save your progress" });
+
+  it("offers nothing before the first answer", async () => {
+    setup({ "GET /api/conversation": convo(0) });
+    await screen.findByLabelText(/Describe your idea/);
+    expect(card()).not.toBeInTheDocument();
+  });
+
+  it("offers it once an answer is in and the canvas is still unfinished, without calling the server to stop", async () => {
+    const { calls } = setup({
+      "GET /api/conversation": withCanvas(incomplete, 1, user(), bot("complete", "Which team?")),
+    });
+    expect(await screen.findByRole("heading", { level: 2, name: "Save your progress" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Download canvas so far/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Stop session/ })).not.toBeInTheDocument(); // the gate is still locked
+    expect(calls.some((c) => c.key === "POST /api/session/purge")).toBe(false);
+  });
+
+  it("is not shown for a finished canvas, which has its own review page", async () => {
+    setup({ "GET /api/conversation": withCanvas(complete, 1, user(), bot("complete", "All done")) });
+    await screen.findByRole("button", { name: "Generate canvas" });
+    expect(card()).not.toBeInTheDocument();
+  });
+
+  it("is hidden while a reply is still coming, so nothing half-written can be saved", async () => {
+    setup({
+      "GET /api/conversation": withCanvas(incomplete, 1, user(), bot("pending")),
+      "GET /api/conversation/turns/22222222222222222222222222222222/stream": () =>
+        new Promise<Response>(() => {}), // never answers
+    });
+    await screen.findByText("My idea");
+    expect(card()).not.toBeInTheDocument();
   });
 });

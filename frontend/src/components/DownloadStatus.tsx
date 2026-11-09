@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { type DownloadStatus as Status, getDownloadStatus, purgeSession } from "../api/downloads";
 
@@ -12,10 +12,44 @@ const OUTSTANDING: Record<string, string> = {
   canvas_not_downloaded: "the one-page canvas",
   appendix_not_downloaded: "the appendix",
 };
-const PURGE_MESSAGES: Record<string, string> = {
-  purge_locked: "Deleting is still locked. Please download both documents first.",
-  revision_conflict: "The canvas changed since it was shown. Please read it again before deleting.",
-};
+const OUT_OF_DATE_PURGE = "The canvas changed since it was shown. Please read it again before continuing.";
+
+// The same panel serves a finished canvas ("final": delete the session) and an unfinished one the
+// user is saving to carry on later ("draft": stop the session). Only the wording differs; the
+// server's gate is the same rule for both.
+const COPY = {
+  final: {
+    heading: "Your documents",
+    locked: "Deleting is locked.",
+    otherLock: "The current canvas must be confirmed and both documents downloaded first.",
+    failedCheck: "We could not check the download status. Deleting stays locked until it has been checked.",
+    ready: "Both documents have been downloaded. You can delete this session when you are ready.",
+    help: "Save both documents somewhere you can find them before you delete anything.",
+    open: "Delete my session…",
+    confirmTitle: "Delete this session now?",
+    confirmBody: "Your conversation, canvas and documents are removed from the server and cannot be recovered.",
+    confirmYes: "Yes, delete everything",
+    confirmNo: "Keep my session",
+    working: "Deleting…",
+    purgeLocked: "Deleting is still locked. Please download both documents first.",
+  },
+  draft: {
+    heading: "Save your progress",
+    locked: "Stopping is locked.",
+    otherLock: "Answer at least one question, then download both documents.",
+    failedCheck: "We could not check the download status. Stopping stays locked until it has been checked.",
+    ready: "Both documents have been downloaded. You can stop this session when you are ready.",
+    help: "Save both documents somewhere you can find them before you stop.",
+    open: "Stop session…",
+    confirmTitle: "Stop this session now?",
+    confirmBody:
+      "Your conversation and draft are removed from the server and cannot be recovered. To carry on, you will start a new session and attach one of the files you downloaded.",
+    confirmYes: "Yes, stop and delete everything",
+    confirmNo: "Keep going",
+    working: "Stopping…",
+    purgeLocked: "Stopping is still locked. Please download both documents first.",
+  },
+} as const;
 const FAILED = "That could not be done. Please try again.";
 
 type State =
@@ -29,16 +63,21 @@ type State =
 export function DownloadStatus({
   revision,
   refreshKey,
+  variant = "final",
+  children,
   onOutOfDate,
   onPurged,
   onAccessLost,
 }: {
   revision: number;
   refreshKey: number; // bumped by the page after each download attempt
+  variant?: "final" | "draft";
+  children?: ReactNode; // shown under the heading, e.g. the download buttons
   onOutOfDate: () => void;
   onPurged: () => void;
   onAccessLost: () => void;
 }) {
+  const copy = COPY[variant];
   const [state, setState] = useState<State>({ phase: "checking" });
   const [last, setLast] = useState<Status | null>(null); // for the rows only, never for deleting
   const [confirming, setConfirming] = useState(false);
@@ -90,7 +129,7 @@ export function DownloadStatus({
       if (!live.current) return;
       if (error instanceof ApiError && error.status === 401) return onAccessLost();
       const code = error instanceof ApiError ? error.code : "";
-      setNotice(PURGE_MESSAGES[code] ?? FAILED);
+      setNotice(code === "purge_locked" ? copy.purgeLocked : code === "revision_conflict" ? OUT_OF_DATE_PURGE : FAILED);
       setConfirming(false);
       if (code === "revision_conflict") onOutOfDate();
       else void refresh();
@@ -125,7 +164,8 @@ export function DownloadStatus({
 
   return (
     <section className="dl card" aria-labelledby="dl-heading">
-      <h2 id="dl-heading">Your documents</h2>
+      <h2 id="dl-heading">{copy.heading}</h2>
+      {children}
       <ul className="dl__list">
         {row("One-page canvas", state.phase === "failed" ? null : known?.canvas_downloaded)}
         {row("Appendix", state.phase === "failed" ? null : known?.appendix_downloaded)}
@@ -133,25 +173,25 @@ export function DownloadStatus({
 
       {state.phase === "failed" && (
         <p role="alert" className="notice">
-          We could not check the download status. Deleting stays locked until it has been checked.
+          {copy.failedCheck}
         </p>
       )}
       {status && !status.purge_eligible && (
         <p className="dl__locked">
-          <strong>Deleting is locked.</strong>{" "}
+          <strong>{copy.locked}</strong>{" "}
           {OUTSTANDING[status.lock_reason ?? ""]
             ? `Still to download: ${OUTSTANDING[status.lock_reason ?? ""]}.`
-            : "The current canvas must be confirmed and both documents downloaded first."}
+            : copy.otherLock}
         </p>
       )}
       {status?.purge_eligible && (
         <p role="status" className="readback__done">
-          Both documents have been downloaded. You can delete this session when you are ready.
+          {copy.ready}
         </p>
       )}
 
       <p className="dl__help">
-        Save both documents somewhere you can find them before you delete anything. &ldquo;Downloaded&rdquo; means this app
+        {copy.help} &ldquo;Downloaded&rdquo; means this app
         finished sending the file to your browser. It cannot check that the file was saved on your device, and nothing is
         submitted to a backlog. If a download is slow, the status may take a moment: choose Refresh status, which does not
         download the file again.
@@ -163,7 +203,7 @@ export function DownloadStatus({
         </button>
         {status?.purge_eligible && !confirming && (
           <button type="button" className="button--danger" onClick={() => setConfirming(true)}>
-            Delete my session…
+            {copy.open}
           </button>
         )}
       </div>
@@ -171,15 +211,14 @@ export function DownloadStatus({
       {status?.purge_eligible && confirming && (
         <div className="dl__confirm" role="group" aria-labelledby="dl-confirm-heading">
           <p id="dl-confirm-heading">
-            <strong>Delete this session now?</strong> Your conversation, canvas and documents are removed from the server
-            and cannot be recovered.
+            <strong>{copy.confirmTitle}</strong> {copy.confirmBody}
           </p>
           <div className="dl__actions">
             <button type="button" className="button--danger" onClick={() => void remove()} disabled={deleting}>
-              {deleting ? "Deleting…" : "Yes, delete everything"}
+              {deleting ? copy.working : copy.confirmYes}
             </button>
             <button type="button" className="button--secondary" onClick={() => setConfirming(false)} disabled={deleting}>
-              Keep my session
+              {copy.confirmNo}
             </button>
           </div>
         </div>

@@ -58,6 +58,11 @@ class PurgeRefused(Exception):
         self.code, self.reason = code, reason
 
 
+def _has_answer(turns) -> bool:
+    """At least one answer from the user is in, so there is something to save."""
+    return any(t.role == "user" and t.status == "complete" and t.text.strip() for t in turns)
+
+
 class ConversationService:
     def __init__(
         self,
@@ -114,12 +119,15 @@ class ConversationService:
             self._clock(),
         )
 
-    def export_snapshot(self, session: Session) -> ExportSnapshot:
-        """One consistent copy of the conversation and draft, only while the canvas is complete.
+    def export_snapshot(self, session: Session, allow_incomplete: bool = False) -> ExportSnapshot:
+        """One consistent copy of the conversation and draft.
 
-        A canvas is only exported once the assistant has finished replying (an answer still being
-        processed means the draft may be about to change). If an answer is submitted while the
-        copy is being taken, it is taken again, so the revision always matches the content.
+        Normally only while the canvas is complete. With `allow_incomplete` an unfinished draft is
+        copied too (marked `complete=False`) so the user can save it and carry on in a new session,
+        provided at least one answer is in. Either way the assistant must have finished replying (an
+        answer still being processed means the draft may be about to change). If an answer is
+        submitted while the copy is being taken, it is taken again, so the revision always matches
+        the content.
         """
         if self._interview is None:
             raise AppendixError("not_ready")
@@ -131,8 +139,13 @@ class ConversationService:
                 if turns and turns[-1].status != "complete":
                     raise AppendixError("unfinished")
                 if not ready:
-                    raise AppendixError("not_ready")
-                return ExportSnapshot(revision, canvas, declined, tuple(turns), confirmed)
+                    if not allow_incomplete:
+                        raise AppendixError("not_ready")
+                    if not _has_answer(turns):
+                        raise AppendixError("nothing_yet")
+                return ExportSnapshot(
+                    revision, canvas, declined, tuple(turns), confirmed, complete=ready
+                )
         raise AppendixError("changed")
 
     def confirm(self, session: Session, revision: int) -> None:
@@ -155,6 +168,15 @@ class ConversationService:
             raise AppendixError("not_confirmed")
         return snapshot
 
+    def downloadable_snapshot(self, session: Session, revision: int) -> ExportSnapshot:
+        """The snapshot for a document download: the current revision, finished or an unfinished
+        draft (with at least one answer in). Confirmation is not needed to save your own work;
+        emailing still needs `confirmed_snapshot`. Any other revision is refused, never served."""
+        snapshot = self.export_snapshot(session, allow_incomplete=True)
+        if revision != snapshot.revision:
+            raise AppendixError("stale")
+        return snapshot
+
     def still_confirmed(self, session: Session, revision: int) -> bool:
         """Checked again just before a file is sent: an answer that arrived while it was being
         built must not let an out-of-date canvas through."""
@@ -165,6 +187,14 @@ class ConversationService:
             current == revision
             and self._interview.confirmed_revision(session.session_id) == revision
         )
+
+    def still_current(self, session: Session, revision: int) -> bool:
+        """The download counterpart of `still_confirmed`: no answer has arrived since the file was
+        built, so what is being sent is still the current revision."""
+        if self._interview is None:
+            return False
+        current, _ = self._store.history(session.session_id)
+        return current == revision
 
     def overview_for(self, session: Session, revision: int, turns: tuple[Any, ...]) -> str | None:
         """The AI-written overview of this revision of the conversation, or None.
@@ -191,9 +221,9 @@ class ConversationService:
         return overview
 
     def record_delivery(self, session: Session, kind: DocumentKind, revision: int) -> bool:
-        """Note that a document was fully sent. Only for the revision that is current *and*
-        confirmed right now, so a response that finishes after an amendment records nothing."""
-        if not self.still_confirmed(session, revision):
+        """Note that a document was fully sent, in any format. Only for the revision that is current
+        right now, so a response that finishes after an amendment records nothing."""
+        if not self.still_current(session, revision):
             return False
         return self._deliveries.record(
             session.session_id, kind, revision, self._clock(), session.expires_at
@@ -213,9 +243,9 @@ class ConversationService:
                 break
         return evaluate_gate(
             revision,
-            ready=ready,
-            reply_finished=stable and (not turns or turns[-1].status == "complete"),
-            confirmed_revision=confirmed,
+            started=self._interview is not None and _has_answer(turns),
+            complete=ready and confirmed == revision,
+            reply_finished=stable and not any(t.status == "pending" for t in turns[-1:]),
             deliveries=self._deliveries.get(sid),
         )
 

@@ -43,14 +43,44 @@ def finish_confirmed(client):
 
 
 @pytest.mark.parametrize("fmt", ["pdf", "docx", "json"])
-def test_an_incomplete_canvas_has_no_appendix(world, fmt):
+def test_with_nothing_answered_there_is_nothing_to_download(world, fmt):
     wire(world)
     client = browser(world)
-    assert appendix(client, fmt).status_code == 409  # nothing said yet
-    say(client, OPENING)
     response = appendix(client, fmt)
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "canvas_not_ready"
+    assert response.json()["error"]["code"] == "nothing_to_download"
+
+
+@pytest.mark.parametrize("fmt", ["pdf", "docx", "json"])
+def test_an_unfinished_canvas_downloads_as_a_marked_draft_to_carry_on_later(world, fmt):
+    wire(world)
+    client = browser(world)
+    say(client, OPENING)
+    assert history(client)["canvas"]["ready_for_review"] is False
+    response = appendix(client, fmt)
+    assert response.status_code == 200
+    assert "-appendix-draft-r" in response.headers["content-disposition"]
+    if fmt == "json":
+        assert response.json()["draft"] is True
+    elif fmt == "pdf":
+        text = " ".join(
+            " ".join(
+                p.extract_text() for p in PdfReader(io.BytesIO(response.content)).pages
+            ).split()
+        )
+        assert "UNFINISHED DRAFT" in text and "attach this file" in text
+    else:
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            assert b"UNFINISHED DRAFT" in z.read("word/document.xml")
+
+
+def test_a_finished_canvas_is_not_marked_as_a_draft(world):
+    wire(world)
+    client = browser(world)
+    finish(client)
+    response = appendix(client, "json")
+    assert response.json()["draft"] is False
+    assert "-draft" not in response.headers["content-disposition"]
 
 
 def test_without_an_interviewer_there_is_nothing_to_export(world):
@@ -118,16 +148,16 @@ def test_the_pdf_carries_the_same_record(world):
         assert "".join(t["text"].split()) in flat
 
 
-def test_a_new_answer_takes_the_canvas_out_of_ready_so_nothing_half_finished_is_exported(world):
+def test_a_new_answer_takes_the_canvas_out_of_ready_so_the_next_download_is_a_draft(world):
     wire(world)
     client = browser(world)
     finish_confirmed(client)
-    assert appendix(client, "json").status_code == 200
+    assert appendix(client, "json").json()["draft"] is False
     say(
         client, "Actually, it also needs to cover night shifts."
     )  # the interviewer asks a follow-up
     assert history(client)["canvas"]["ready_for_review"] is False
-    assert appendix(client, "json").status_code == 409
+    assert appendix(client, "json").json()["draft"] is True
 
 
 def test_one_session_never_receives_anothers_appendix(world):
