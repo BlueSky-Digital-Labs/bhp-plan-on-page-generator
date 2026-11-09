@@ -17,6 +17,7 @@ import {
 } from "../api/attachments";
 import { CanvasPanel } from "./CanvasPanel";
 import { navigate, ROUTES } from "../router";
+import { ChoiceAnswer } from "./ChoiceAnswer";
 import { SaveProgress } from "./SaveProgress";
 import { Loading } from "./Loading";
 
@@ -127,6 +128,7 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
   const [attachment, setAttachment] = useState<Attachment | null>(null);
   const [attaching, setAttaching] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
+  const [typeOwn, setTypeOwn] = useState(false); // chose to type instead of picking from the offered list
   const fileInput = useRef<HTMLInputElement>(null);
 
   // What is sent: what was typed, then the attached file's text, as one answer.
@@ -209,12 +211,15 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
     [handleError, refresh],
   );
 
-  async function send(event?: { preventDefault(): void }) {
+  // `picked` is the wording of option(s) chosen from an offered list; otherwise the typed answer. With
+  // neither, a retry after a failed send reuses what was being sent.
+  async function send(event?: { preventDefault(): void }, picked?: string) {
     event?.preventDefault();
-    if (sending || !history || !composed.trim()) return;
+    const text = picked ?? (composed.trim() ? composed : (submission.current?.text ?? ""));
+    if (sending || !history || !text.trim()) return;
     // Same text => same id (a retry). Edited text => a new answer, so a new id.
-    if (!submission.current || submission.current.text !== composed) {
-      submission.current = { id: newSubmissionId(), text: composed };
+    if (!submission.current || submission.current.text !== text) {
+      submission.current = { id: newSubmissionId(), text };
     }
     followNewest.current = true;
     setSending(true);
@@ -224,7 +229,7 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
       const result = await submitTurn({
         submissionId: submission.current.id,
         expectedRevision: history.revision,
-        text: composed,
+        text,
       });
       submission.current = null;
       if (mounted.current) {
@@ -243,6 +248,10 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
       if (mounted.current) setSending(false);
     }
   }
+
+  // A new question starts with its choices again, whichever way the last one was answered.
+  const questionKey = history?.progression?.outstanding_question?.text ?? "";
+  useEffect(() => setTypeOwn(false), [questionKey]);
 
   async function attach(file: File | undefined) {
     if (!file) return;
@@ -310,6 +319,19 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
     history?.canvas?.ready_for_review !== true &&
     turns.some((t) => t.role === "user" && t.status === "complete");
   const submitMessage = submitError ? (SUBMIT_MESSAGES[submitError.code] ?? UNSURE_SAVED) : null;
+  // A question with a fixed list of answers is picked from, not typed, once the assistant has asked it
+  // and nothing else is under way. The server names the list; typing instead is one click away.
+  const outstanding = history?.progression?.outstanding_question ?? null;
+  const lastTurn = turns[turns.length - 1];
+  const choices =
+    !blocked &&
+    !typeOwn &&
+    !attachment &&
+    lastTurn?.role === "assistant" &&
+    lastTurn.status === "complete" &&
+    outstanding?.choices
+      ? outstanding.choices
+      : null;
 
   return (
     <div className="conversation-layout">
@@ -448,49 +470,61 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
                 {attachError}
               </p>
             )}
-            <form onSubmit={(e) => void send(e)} className="answer-form composer">
-              <input
-                ref={fileInput}
-                type="file"
-                accept={ATTACHMENT_ACCEPT}
-                className="sr-only"
-                tabIndex={-1}
-                aria-hidden="true"
-                data-testid="file-input"
-                onChange={(e) => void attach(e.target.files?.[0])}
+            {choices ? (
+              <ChoiceAnswer
+                choices={choices}
+                disabled={blocked}
+                sending={sending}
+                onSend={(text) => void send(undefined, text)}
+                onTypeOwn={() => setTypeOwn(true)}
               />
-              <button
-                type="button"
-                className="composer__attach"
-                aria-label="Attach a file (PDF, Word, PowerPoint or JSON)"
-                title="Attach a file"
-                onClick={() => fileInput.current?.click()}
-                disabled={blocked || attaching}
-              >
-                <PaperclipIcon />
-              </button>
-              <label htmlFor="answer" className="sr-only">
-                {firstAnswer ? "Describe your idea" : "Your answer"}
-              </label>
-              <textarea
-                id="answer"
-                name="answer"
-                rows={2}
-                maxLength={MAX_ANSWER_CHARS}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                placeholder={firstAnswer ? "Describe your idea in your own words…" : "Type your answer…"}
-                aria-describedby="answer-help"
-              />
-              <button type="submit" disabled={blocked || !composed.trim()}>
-                {sending ? "Sending…" : "Send"}
-              </button>
-            </form>
-            <p id="answer-help" className="field__help">
-              Up to {MAX_ANSWER_CHARS} characters. You can also attach one PDF, Word, PowerPoint or JSON file
-              (up to {MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB): its text is sent with your answer, as if you had typed
-              it. Do not include passwords or personal details.
-            </p>
+            ) : (
+              <>
+              <form onSubmit={(e) => void send(e)} className="answer-form composer">
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept={ATTACHMENT_ACCEPT}
+                  className="sr-only"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  data-testid="file-input"
+                  onChange={(e) => void attach(e.target.files?.[0])}
+                />
+                <button
+                  type="button"
+                  className="composer__attach"
+                  aria-label="Attach a file (PDF, Word, PowerPoint or JSON)"
+                  title="Attach a file"
+                  onClick={() => fileInput.current?.click()}
+                  disabled={blocked || attaching}
+                >
+                  <PaperclipIcon />
+                </button>
+                <label htmlFor="answer" className="sr-only">
+                  {firstAnswer ? "Describe your idea" : "Your answer"}
+                </label>
+                <textarea
+                  id="answer"
+                  name="answer"
+                  rows={2}
+                  maxLength={MAX_ANSWER_CHARS}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder={firstAnswer ? "Describe your idea in your own words…" : "Type your answer…"}
+                  aria-describedby="answer-help"
+                />
+                <button type="submit" disabled={blocked || !composed.trim()}>
+                  {sending ? "Sending…" : "Send"}
+                </button>
+              </form>
+              <p id="answer-help" className="field__help">
+                Up to {MAX_ANSWER_CHARS} characters. You can also attach one PDF, Word, PowerPoint or JSON file
+                (up to {MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB): its text is sent with your answer, as if you had typed
+                it. Do not include passwords or personal details.
+              </p>
+              </>
+            )}
           </div>
         </section>
         {saveVisible && history && (

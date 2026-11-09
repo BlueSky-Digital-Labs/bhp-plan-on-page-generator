@@ -571,6 +571,56 @@ test.describe("one-page canvas", () => {
     await expect(page.locator(".mail").getByRole("alert")).toContainText("not switched on yet"); // 503 email_unavailable
   });
 
+  test("a question with a fixed list is answered by picking and sending, or by typing instead", async ({ page }) => {
+    await signInAndWait(page);
+    const ASKING = {
+      revision: 2,
+      turns: [
+        { turn_id: "1".repeat(32), role: "user", text: "We copy shift notes between spreadsheets.", status: "complete" },
+        { turn_id: "2".repeat(32), role: "assistant", text: "What priority would you give this idea?", status: "complete" },
+      ],
+      canvas: { fields: {}, missing_required: ["priority"], ready_for_review: false },
+      progression: {
+        phase: "interview",
+        outstanding_question: {
+          target: "priority",
+          kind: "missing",
+          text: "What priority would you give this idea?",
+          choices: { multiple: false, options: ["Must-have", "Nice-to-have", "Exploratory"] },
+        },
+      },
+    };
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: ASKING }));
+    await page.route("**/api/downloads", (route) =>
+      route.fulfill({ json: { revision: 2, canvas_downloaded: false, appendix_downloaded: false, purge_eligible: false, lock_reason: "both_not_downloaded", complete: false } }),
+    );
+    let sent: unknown = null;
+    await page.route("**/api/conversation/turns", (route) => {
+      sent = route.request().postDataJSON();
+      return route.fulfill({
+        status: 201,
+        json: {
+          revision: 3,
+          user_turn: { turn_id: "3".repeat(32), role: "user", text: "Must-have", status: "complete" },
+          assistant_turn: { turn_id: "4".repeat(32), role: "assistant", text: "Thanks.", status: "complete" },
+        },
+      });
+    });
+    await page.goto("/conversation");
+
+    await expect(page.getByRole("group", { name: "Choose one" })).toBeVisible();
+    await expect(page.getByLabel("Your answer")).toHaveCount(0); // no text box while a list is offered
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await page.getByLabel("Must-have").check();
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => sent).toMatchObject({ expected_revision: 2, text: "Must-have" });
+
+    await page.reload();
+    await page.getByRole("button", { name: "Type my own answer instead" }).click();
+    await expect(page.getByLabel("Your answer")).toBeVisible();
+    await expect(page.getByRole("group", { name: "Choose one" })).toHaveCount(0);
+  });
+
   test("saving halfway: download both files as they are, stop the session, and be told how to carry on", async ({ page }) => {
     await signInAndWait(page);
     const HALF = {

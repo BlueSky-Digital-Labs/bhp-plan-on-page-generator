@@ -652,3 +652,89 @@ describe("saving progress to stop and carry on later", () => {
     expect(card()).not.toBeInTheDocument();
   });
 });
+
+describe("answering from a list of choices", () => {
+  const PRIORITY = { multiple: false, options: ["Must-have", "Nice-to-have", "Exploratory"] };
+  const TYPES = { multiple: true, options: ["Find Information", "Generate Reports", "Predict Issues"] };
+  // The same history, with what the server says is outstanding.
+  const withQuestion = (choices: unknown, text = "What priority would you give this idea?", revision = 1, kind = "missing") => () =>
+    json({
+      revision,
+      turns: [user(), bot("complete", text)],
+      canvas: { fields: {}, missing_required: ["priority"], ready_for_review: false },
+      progression: { phase: "interview", outstanding_question: { target: "priority", kind, text, choices } },
+    });
+  const box = () => screen.queryByLabelText(/Describe your idea|Your answer/);
+
+  it("shows the options to pick from instead of a text box, and sends the picked wording as the answer", async () => {
+    const { calls } = setup({
+      "GET /api/conversation": [withQuestion(PRIORITY), convo(2, user(), bot("pending"))],
+      "POST /api/conversation/turns": created(),
+      [STREAM]: () => controlledStream().response(),
+    });
+    expect(await screen.findByRole("group", { name: "Choose one" })).toBeInTheDocument();
+    expect(box()).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    await userEvent.click(screen.getByLabelText("Must-have"));
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(posts(calls)).toHaveLength(1));
+    expect(body(calls)).toEqual({ submission_id: expect.stringMatching(/^[\w-]{8,64}$/), expected_revision: 1, text: "Must-have" });
+  });
+
+  it("lets several be picked for a question that takes more than one", async () => {
+    const { calls } = setup({
+      "GET /api/conversation": [withQuestion(TYPES, "What kind of help do you want?"), convo(2, user(), bot("pending"))],
+      "POST /api/conversation/turns": created(),
+      [STREAM]: () => controlledStream().response(),
+    });
+    await userEvent.click(await screen.findByLabelText("Predict Issues"));
+    await userEvent.click(screen.getByLabelText("Find Information"));
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(posts(calls)).toHaveLength(1));
+    expect(body(calls).text).toBe("Find Information, Predict Issues");
+  });
+
+  it("goes back to the text box when the user chooses to type their own answer", async () => {
+    setup({ "GET /api/conversation": withQuestion(PRIORITY) });
+    await userEvent.click(await screen.findByRole("button", { name: "Type my own answer instead" }));
+    expect(await screen.findByLabelText(/Your answer/)).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Choose one" })).not.toBeInTheDocument();
+  });
+
+  it("uses the text box when the server offers no list for the question", async () => {
+    setup({ "GET /api/conversation": withQuestion(null, "Why did you give this idea that priority?", 1, "probe") });
+    expect(await screen.findByLabelText(/Your answer/)).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Choose one" })).not.toBeInTheDocument();
+  });
+
+  it("keeps showing the choices, with the pick still there, if sending fails, and retries the same answer", async () => {
+    const { calls } = setup({
+      "GET /api/conversation": withQuestion(PRIORITY),
+      "POST /api/conversation/turns": [() => envelope("internal_error", 500), created()],
+      [STREAM]: () => controlledStream().response(),
+    });
+    await userEvent.click(await screen.findByLabelText("Exploratory"));
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Try sending again" }));
+    await waitFor(() => expect(posts(calls)).toHaveLength(2));
+    const [first, second] = posts(calls).map((c) => JSON.parse(String(c.init?.body)));
+    expect(second.text).toBe("Exploratory");
+    expect(second.submission_id).toBe(first.submission_id); // a retry of the same answer, never doubled
+  });
+
+  it("does not offer the list while a reply is still being written", async () => {
+    setup({
+      "GET /api/conversation": () =>
+        json({
+          revision: 1,
+          turns: [user(), bot("pending")],
+          canvas: { fields: {}, missing_required: ["priority"], ready_for_review: false },
+          progression: { phase: "interview", outstanding_question: { target: "priority", kind: "missing", text: "x", choices: PRIORITY } },
+        }),
+      [STREAM]: () => new Promise<Response>(() => {}),
+    });
+    await screen.findByText("My idea");
+    expect(screen.queryByRole("group", { name: "Choose one" })).not.toBeInTheDocument();
+  });
+});

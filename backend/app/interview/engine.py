@@ -174,6 +174,31 @@ def is_ready(s: InterviewState) -> bool:
     )
 
 
+# The fields whose answer is one (or several) of a fixed list. The server owns the lists, so the
+# browser never has its own copy: it shows whatever is sent here.
+CHOICE_FIELDS: dict[str, tuple[tuple[str, ...], bool]] = {
+    "priority": (PRIORITIES, False),  # exactly one
+    "opportunityTypes": (OPPORTUNITY_TYPES, True),  # one or more
+}
+
+
+def choices_for(target: Target, s: InterviewState) -> dict[str, Any] | None:
+    """The options to offer for the outstanding question, or None when it needs typed words.
+
+    Only when the question is asking for the field itself ("missing", or asking again because the
+    answer was unclear). A follow-up (why that priority?) and a choice between an earlier and a new
+    value are not about the list, so they are typed. Picking an option sends its wording as the
+    user's answer, so every rule about typed words (the priority is only ever the user's own) holds.
+    """
+    spec = CHOICE_FIELDS.get(target.field)
+    if spec is None:
+        return None
+    if target.kind == "missing" or (target.kind == "clarify" and target.field not in s.conflicts):
+        options, multiple = spec
+        return {"multiple": multiple, "options": list(options)}
+    return None
+
+
 def canvas_view(s: InterviewState) -> dict[str, Any]:
     """What the browser may see of the draft."""
     return {
@@ -206,7 +231,7 @@ def progression_view(s: InterviewState) -> dict[str, Any]:
     return {
         "phase": phase,
         "outstanding_question": (
-            {"target": t.field, "kind": t.kind, "text": s.question}
+            {"target": t.field, "kind": t.kind, "text": s.question, "choices": choices_for(t, s)}
             if t is not None and s.question
             else None
         ),

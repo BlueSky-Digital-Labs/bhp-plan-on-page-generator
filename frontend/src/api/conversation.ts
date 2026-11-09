@@ -16,8 +16,21 @@ export interface CanvasView {
 
 // Where the guided interview is. Computed by the server; the page only shows it.
 export type Phase = "interview" | "clarification" | "data_and_systems" | "review_ready";
+// Set only when the answer is one (or several) of a fixed list. The server owns the list; the page
+// shows whatever it is sent.
+export interface Choices {
+  multiple: boolean;
+  options: string[];
+}
+export interface OutstandingQuestion {
+  target: string;
+  kind: string;
+  text: string | null;
+  choices: Choices | null;
+}
 export interface Progression {
   phase: Phase;
+  outstanding_question?: OutstandingQuestion | null;
 }
 
 // The stored history is the source of truth. `revision` is the version the next answer builds on.

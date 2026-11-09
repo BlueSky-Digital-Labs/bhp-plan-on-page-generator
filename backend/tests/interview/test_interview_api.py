@@ -342,3 +342,40 @@ def test_the_progression_has_the_same_keys_with_or_without_an_interviewer(world)
 
     client = browser(world)
     assert set(history(client)["progression"]) == set(progression_view(InterviewState()))
+
+
+# --- questions with a fixed list of answers ---------------------------------------------------------
+
+
+def test_the_server_offers_the_priority_list_and_the_picked_wording_sets_the_priority(world):
+    """Pick-and-send is just an answer: sending the option's own wording is the user's typed choice."""
+    wire(world)
+    client = browser(world)
+    reply, data = say(client, OPENING)
+    offered = None
+    for _ in range(40):
+        question = data["progression"]["outstanding_question"]
+        if question and question["target"] == "priority" and question["choices"]:
+            offered = question["choices"]
+            break
+        reply, data = say(client, answer_for(reply))
+    assert offered == {"multiple": False, "options": ["Must-have", "Nice-to-have", "Exploratory"]}
+    _, data = say(client, "Nice-to-have")  # what the page sends when that option is picked
+    assert data["canvas"]["fields"]["priority"] == "Nice-to-have"
+
+
+def test_other_questions_are_not_offered_a_list(world):
+    wire(world)
+    client = browser(world)
+    reply, data = say(client, OPENING)
+    for _ in range(40):
+        question = data["progression"]["outstanding_question"]
+        if question is None:
+            break
+        if question["target"] not in ("priority", "opportunityTypes") or question["kind"] in (
+            "probe",
+            "confirm",
+            "optional",
+        ):
+            assert question["choices"] is None
+        reply, data = say(client, answer_for(reply))

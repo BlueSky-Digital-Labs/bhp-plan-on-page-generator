@@ -236,3 +236,77 @@ def test_the_follow_up_marker_moves_only_when_the_question_is_stored():
     discarded = convo.interviewer.process(convo.state, "Must-have", "u99", ("u99",))
     assert discarded.state.target.kind == "probe" and "priority" in discarded.state.probed
     assert "priority" not in convo.state.probed  # the live state is untouched until it is stored
+
+
+# --- questions with a fixed list of answers -----------------------------------------------------------
+
+
+def ask(field: str, kind: str, **state):
+    from app.interview.engine import InterviewState, Target
+
+    s = InterviewState(target=Target(kind, field), question="Which one?", **state)
+    return progression_view(s)["outstanding_question"]
+
+
+def test_the_priority_question_offers_the_three_priorities_to_pick_one():
+    q = ask("priority", "missing")
+    assert q["choices"] == {
+        "multiple": False,
+        "options": ["Must-have", "Nice-to-have", "Exploratory"],
+    }
+
+
+def test_the_opportunity_question_offers_the_six_types_to_pick_any_of():
+    q = ask("opportunityTypes", "missing")
+    assert q["choices"]["multiple"] is True
+    assert q["choices"]["options"] == [
+        "Find Information",
+        "Generate Reports",
+        "Predict Issues",
+        "Recommend Actions",
+        "Analyse Data",
+        "Automate Workflows",
+    ]
+
+
+def test_asking_again_because_the_answer_was_unclear_still_offers_the_choices():
+    assert ask("priority", "clarify")["choices"]["options"][0] == "Must-have"
+    assert ask("opportunityTypes", "clarify")["choices"]["multiple"] is True
+
+
+def test_a_choice_between_an_earlier_and_a_new_value_is_typed_not_picked_from_the_list():
+    assert ask("priority", "clarify", conflicts={"priority": "Exploratory"})["choices"] is None
+
+
+@pytest.mark.parametrize(
+    ("field", "kind"),
+    [
+        ("priority", "probe"),  # why that priority? is a typed reason
+        ("solutionName", "missing"),
+        ("data", "confirm"),
+        ("kpis", "optional"),
+    ],
+)
+def test_every_other_question_is_answered_in_words(field, kind):
+    assert ask(field, kind)["choices"] is None
+
+
+def test_the_options_come_from_the_same_lists_the_validator_accepts():
+    from app.interview.canvas import OPPORTUNITY_TYPES, PRIORITIES
+
+    assert tuple(ask("priority", "missing")["choices"]["options"]) == PRIORITIES
+    assert tuple(ask("opportunityTypes", "missing")["choices"]["options"]) == OPPORTUNITY_TYPES
+
+
+def test_a_real_conversation_offers_the_priority_choices_when_it_asks_for_it():
+    convo = Conversation()
+    convo.say(OPENING)
+    offered = []
+    for _ in range(40):
+        question = view(convo)["outstanding_question"]
+        if question is None:
+            break
+        if question["choices"]:
+            offered.append((question["target"], question["choices"]["multiple"]))
+        convo.say(reply_to(convo.state.target))
+    assert ("priority", False) in offered  # asked in the flow, with its three options

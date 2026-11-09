@@ -46,6 +46,24 @@ data or systems being mentioned in passing, so an initial description cannot ski
 the answer text. The conversation screen shows the phase as a small label (fixed copy keyed on
 the enum).
 
+### Questions with a fixed list of answers
+
+Two fields are answered from a fixed list: **Priority** (exactly one of Must-have, Nice-to-have,
+Exploratory) and **Opportunity types** (one or more of Find Information, Generate Reports, Predict
+Issues, Recommend Actions, Analyse Data, Automate Workflows). For these, `outstanding_question`
+also carries `choices: {"multiple": bool, "options": [...]}` (`choices_for` in `engine.py`, from the
+same lists the validator accepts); for every other question `choices` is `null`.
+
+The conversation screen shows the options as radio buttons (or checkboxes) with a **Send** button
+instead of the text box (`ChoiceAnswer.tsx`), and a **Type my own answer instead** button to go back
+to the text box. Picking sends the option's own wording ("Must-have", or "Find Information, Predict
+Issues" in the list's order) through the normal answer route, so it is exactly the user's typed
+answer and every rule below still applies, including that the priority is only ever the user's own
+explicit choice. The list is offered only when the question asks for the field itself ("missing",
+or asked again because the answer was unclear) and the assistant has finished replying; the
+priority follow-up ("why that priority?") and a choice between an earlier and a new value are
+typed. The browser has no copy of the lists: it shows whatever the server sends.
+
 ## Rules the engine enforces (each has a test)
 
 * Only the 16 canvas ids (same as `frontend/src/canvas/fields.ts`); only the six opportunity
