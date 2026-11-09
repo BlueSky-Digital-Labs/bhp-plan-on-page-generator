@@ -170,7 +170,12 @@ body:has(.entry) { background: radial-gradient(60rem 28rem at 50% 3rem, var(--br
 @media (prefers-reduced-motion: reduce) { .entry .access button[type="submit"] { transition: none; } }
 
 /* ---- One-page canvas (colours sampled from the AI Opportunity Canvas template image) ---- */
-.review-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem; }
+.review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+.review-actions__main { min-width: 11rem; font-weight: 600; }
+/* The optional actions (downloads, delete) sit to the right of the main button, in a quieter colour. */
+.review-actions .dl--inline { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0 0 0 auto; }
+.review-actions .dl--inline .dl__wide { flex-basis: 100%; margin: 0; }
+@media (max-width: 40rem) { .review-actions .dl--inline { margin-left: 0; } .review-actions__main { flex-basis: 100%; } }
 /* A button that opens a short list of formats. */
 .menu { position: relative; display: inline-block; }
 .menu__list {
@@ -400,4 +405,3 @@ body:has(.entry) { background: radial-gradient(60rem 28rem at 50% 3rem, var(--br
 .modal p { margin: 0 0 1.25rem; line-height: 1.5; }
 .modal__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.5rem; }
 @media print { .modal { display: none !important; } }
-.readback__done--small { font-size: 0.8125rem; line-height: 1.4; padding: 0.4rem 0.7rem; }

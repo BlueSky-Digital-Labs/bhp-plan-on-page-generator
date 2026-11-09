@@ -17,8 +17,8 @@ when headers go out, if the connection drops or is cancelled, or if building the
 
 That is the only fact recorded. It does **not** prove the browser kept the file or that the user
 saved it, and the screen says so. A document counts in whatever format it was sent: the canvas as PDF or PowerPoint, the appendix as PDF,
-Word or JSON (`delivery_recorder` in `app/api/exports.py`). One format of each is enough. The email does
-not count.
+Word or JSON (`delivery_recorder` in `app/api/exports.py`). One format of each is enough. A successful
+submission by email counts as both documents, so it unlocks deleting too.
 
 ## The gate
 
@@ -88,12 +88,13 @@ character limit on attached text, which is cut at a word.
 
 ## On screen
 
-On the review page, once the canvas is confirmed, a **Your documents** card shows just the one-page
-canvas as "Downloaded" or "Not downloaded yet" (words and symbols, not colour alone) and the
-**Delete my session** button, which stays locked (with the reason available to assistive technology)
-until the server says the canvas was downloaded. It asks for one more confirmation in a window over
-the page. There is no explanatory text and no refresh button; after a failed status read a **Check
-again** button appears. The confirmation line above says only that the version is final. The page:
+On the review page, once the canvas is confirmed, the read-back card goes and one row of buttons
+remains: **Submit by email** on the left as the main button, and, to the right in the quieter
+(outlined) colour, **Download canvas**, **Download appendix** and **Delete my session**. Delete stays
+locked (the reason is available to assistive technology) until the server says the one-page canvas was
+downloaded **or the submission was emailed** (a successful send is recorded as both documents). It
+asks for one more confirmation in a window over the page. There is no explanatory text, no status row
+and no refresh button; after a failed status read a **Check again** button appears. The page:
 
 * reads the status on arrival, after each download attempt, and three more times (1.5 s, 4 s and 10 s
   later) because a file can finish just after the first read; then it stops;

@@ -271,7 +271,7 @@ describe("review route (read-back, confirmation and downloads)", () => {
     const api = mockApi({ "GET /api/session": SIGNED_IN, "GET /api/csrf": csrfRoute, "GET /api/downloads": downloads(), ...routes });
     at("/review");
     render(<App />);
-    await screen.findByRole("heading", { level: 2, name: "Check your canvas" });
+    await screen.findByRole("heading", { level: 1, name: /AI OPPORTUNITY CANVAS/ }); // the canvas itself
     return api;
   };
   const menus = () => screen.queryAllByRole("button", { name: /^Download (canvas|appendix)/ });
@@ -292,7 +292,7 @@ describe("review route (read-back, confirmation and downloads)", () => {
       "POST /api/canvas/confirm": review(3, 3),
     });
     await userEvent.click(screen.getByRole("button", { name: "Yes, this is correct" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("You confirmed this version");
+    expect(await screen.findByRole("button", { name: "Submit by email" })).toBeInTheDocument();
     expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/canvas/confirm")!.init?.body))).toEqual({ revision: 3 });
     expect(screen.getByRole("button", { name: /^Download canvas/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Download appendix/ })).toBeInTheDocument();
@@ -315,7 +315,7 @@ describe("review route (read-back, confirmation and downloads)", () => {
     await open({ "GET /api/conversation": review(3, 3) });
     expect(screen.queryByRole("button", { name: /Back to the conversation/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /go back and correct it/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("so it is final");
+    expect(screen.queryByText(/You confirmed this version|Check your canvas/)).not.toBeInTheDocument(); // nothing left to read
   });
 
   it("lets the user go back to correct something through the conversation", async () => {
@@ -431,7 +431,6 @@ describe("review route (read-back, confirmation and downloads)", () => {
     it("shows the two documents for the confirmed revision, with deleting locked", async () => {
       await open({ "GET /api/conversation": review(3, 3) });
       expect(await screen.findByRole("heading", { level: 2, name: "Your documents" })).toBeInTheDocument();
-      expect(await screen.findByText(/Not downloaded yet/)).toBeInTheDocument();
       expect(deleteButton()).toBeDisabled();
     });
 
@@ -451,7 +450,7 @@ describe("review route (read-back, confirmation and downloads)", () => {
         "GET /api/downloads": [downloads(false, false), downloads(true, true)],
         "GET /api/canvas-file?format=pdf&revision=3": file(),
       });
-      await screen.findByText(/Not downloaded yet/);
+      await waitFor(() => expect(reads(calls)).toBe(1));
       expect(deleteButton()).toBeDisabled();
       await chooseDownload("Download canvas", "PDF");
       await waitFor(() => expect(saved).toHaveLength(1));
@@ -460,15 +459,15 @@ describe("review route (read-back, confirmation and downloads)", () => {
     });
 
     it("does not unlock deleting just because a download was clicked", async () => {
-      await open({
+      const { calls } = await open({
         "GET /api/conversation": review(3, 3),
         "GET /api/downloads": downloads(false, false), // the server has not finished sending anything
         "GET /api/canvas-file?format=pdf&revision=3": file(),
       });
-      await screen.findByText(/Not downloaded yet/);
+      await waitFor(() => expect(reads(calls)).toBe(1));
       await chooseDownload("Download canvas", "PDF");
       await waitFor(() => expect(saved).toHaveLength(1));
-      await waitFor(() => expect(screen.getByText(/Not downloaded yet/)).toBeInTheDocument());
+      await waitFor(() => expect(reads(calls)).toBeGreaterThanOrEqual(2));
       expect(deleteButton()).toBeDisabled();
     });
 
@@ -512,6 +511,7 @@ describe("review route (read-back, confirmation and downloads)", () => {
 
   describe("submitting by email", () => {
     const mailButton = () => screen.queryByRole("button", { name: /^(Submit by email|Submitting…)$/ });
+    const deleteButton = () => screen.queryByRole("button", { name: /^Delete my session/ });
 
     it("offers no email before the canvas is confirmed", async () => {
       await open({ "GET /api/conversation": review(3, null) });
@@ -533,6 +533,29 @@ describe("review route (read-back, confirmation and downloads)", () => {
       await userEvent.click(mailButton()!);
       expect(await screen.findByText(/^Submitted by email\./)).toBeInTheDocument();
       expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/email")!.init?.body))).toEqual({ revision: 3 });
+    });
+
+    it("unlocks deleting once the submission has been emailed, as a download does", async () => {
+      await open({
+        "GET /api/conversation": review(3, 3),
+        "GET /api/downloads": [downloads(false, false), downloads(true, true)], // the server counts the send
+        "POST /api/email": () => json({ sent: 1 }),
+      });
+      await waitFor(() => expect(deleteButton()).toBeDisabled());
+      await userEvent.click(mailButton()!);
+      await screen.findByText(/^Submitted by email\./);
+      await waitFor(() => expect(deleteButton()).toBeEnabled());
+    });
+
+    it("puts the email first and the downloads and delete after it, in the quieter colour", async () => {
+      await open({ "GET /api/conversation": review(3, 3) });
+      const main = mailButton()!;
+      const optional = [screen.getByRole("button", { name: /^Download canvas/ }), screen.getByRole("button", { name: /^Download appendix/ }), deleteButton()!];
+      for (const button of optional) {
+        expect(Boolean(main.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+        expect(button).toHaveClass("button--secondary");
+      }
+      expect(main).not.toHaveClass("button--secondary");
     });
 
     it("re-reads the canvas and drops the email and download buttons when the confirmation no longer applies", async () => {

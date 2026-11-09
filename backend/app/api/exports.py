@@ -107,7 +107,8 @@ def delivery_recorder(
     snapshot: ExportSnapshot,
 ) -> Callable[[], None]:
     """What to do once a file has been fully sent. A document counts towards the deletion gate in
-    whatever format it was downloaded (PDF, PowerPoint, Word or JSON); the email does not."""
+    whatever format it was downloaded (PDF, PowerPoint, Word or JSON). A successful email counts
+    as both (see `send_email`)."""
     return lambda: service.record_delivery(session, kind, snapshot.revision)
 
 

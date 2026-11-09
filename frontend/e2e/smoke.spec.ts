@@ -512,7 +512,8 @@ test.describe("one-page canvas", () => {
     await expect(page.getByRole("button", { name: /^Download/ })).toHaveCount(0); // nothing before confirming
 
     await page.getByRole("button", { name: "Yes, this is correct" }).click();
-    await expect(page.getByRole("status")).toContainText("You confirmed this version");
+    await expect(page.getByRole("button", { name: "Submit by email" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Check your canvas" })).toHaveCount(0); // nothing left to read
     await expect(page.getByRole("button", { name: /Back to the conversation/ })).toHaveCount(0); // final once confirmed
 
     const files = [
@@ -690,25 +691,32 @@ test.describe("one-page canvas", () => {
     expect(purged).toEqual({ revision: HALF.revision });
   });
 
-  test("download status: deleting stays locked until the server says the one-page canvas is downloaded", async ({ page }) => {
+  test("download status: deleting stays locked until the server says the canvas was downloaded or emailed", async ({ page }) => {
     await signInAndWait(page);
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
-    const card = page.locator(".dl");
+    const del = page.getByRole("button", { name: /^Delete my session/ });
     for (const [canvas, appendix] of [[false, false], [false, true]] as const) {
       await page.unroute("**/api/downloads");
       await mockDownloads(page, canvas, appendix);
       await page.goto("/review");
-      await expect(card.getByRole("heading", { name: "Your documents" })).toBeVisible();
-      await expect(card.locator("li", { hasText: "One-page canvas" })).toContainText("Not downloaded yet");
-      await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Submit by email" })).toBeVisible();
+      await expect(del).toBeDisabled();
     }
-    await expect(card).not.toContainText("Refresh status"); // the long explanation and the refresh are gone
+    await expect(page.locator(".review-actions")).not.toContainText("Refresh status"); // no explanation, no refresh
 
     await page.unroute("**/api/downloads");
     await mockDownloads(page, true, false); // the canvas alone is enough
     await page.goto("/review");
-    await expect(card.locator("li", { hasText: "One-page canvas" })).toContainText("Downloaded");
-    await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeEnabled();
+    await expect(del).toBeEnabled();
+
+    // Layout: the email is the main button on the left; downloads and delete sit to its right, in the quieter colour.
+    const box = async (name: RegExp | string) => (await page.getByRole("button", { name }).boundingBox())!;
+    const mail = await box("Submit by email");
+    for (const name of [/^Download canvas/, /^Download appendix/, /^Delete my session/]) {
+      const other = await box(name);
+      expect(other.x).toBeGreaterThan(mail.x + mail.width);
+      await expect(page.getByRole("button", { name })).toHaveClass(/button--secondary/);
+    }
   });
 
   test("download status: a failed status check keeps deleting locked and can be retried", async ({ page }) => {

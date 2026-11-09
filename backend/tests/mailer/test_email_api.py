@@ -192,6 +192,16 @@ def test_only_the_current_revision_can_be_sent(world):
     assert not mailer.sent
 
 
+def test_a_successful_send_unlocks_deleting_like_a_download_but_a_failed_one_does_not(world):
+    client, mailer = ready_client(world)
+    before = client.get("/api/downloads").json()
+    assert before["purge_eligible"] is False and before["lock_reason"] == "canvas_not_downloaded"
+    assert send(client).status_code == 200 and len(mailer.sent) == 1
+    after = client.get("/api/downloads").json()
+    assert after["purge_eligible"] and after["canvas_downloaded"] and after["appendix_downloaded"]
+    assert after["lock_reason"] is None
+
+
 def test_an_answer_after_confirming_means_the_old_confirmation_does_not_send(world):
     client, mailer = ready_client(world)
     amend_behind_the_lock(world, client)

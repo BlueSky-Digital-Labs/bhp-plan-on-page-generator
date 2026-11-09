@@ -19,11 +19,11 @@ const COPY = {
     open: "Delete my session…",
     confirmTitle: "Delete this session now?",
     confirmBody: "Your conversation, canvas and documents are removed from the server and cannot be recovered.",
-    lockedHint: "Download the one-page canvas first.",
+    lockedHint: "Download the one-page canvas, or submit it by email, first.",
     confirmYes: "Yes, delete everything",
     confirmNo: "Keep my session",
     working: "Deleting…",
-    purgeLocked: "Deleting is still locked. Please download the one-page canvas first.",
+    purgeLocked: "Deleting is still locked. Please download the one-page canvas or submit it by email first.",
   },
   draft: {
     heading: "Save your progress",
@@ -68,7 +68,6 @@ export function DownloadStatus({
 }) {
   const copy = COPY[variant];
   const [state, setState] = useState<State>({ phase: "checking" });
-  const [last, setLast] = useState<Status | null>(null); // for the rows only, never for deleting
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -89,7 +88,6 @@ export function DownloadStatus({
       const status = await getDownloadStatus();
       if (!live.current || mine !== latest.current) return;
       if (status.revision !== revision) return onOutOfDate(); // answered again, in another tab
-      setLast(status);
       setState({ phase: "ready", status });
       if (!status.purge_eligible) setConfirming(false);
     } catch (error) {
@@ -128,29 +126,6 @@ export function DownloadStatus({
   };
 
   const status = state.phase === "ready" ? state.status : null;
-  const known = status ?? last;
-  // undefined: being checked. null: the check failed, so the state is unknown.
-  const row = (label: string, done: boolean | null | undefined) => (
-    <li>
-      <span className="dl__name">{label}</span>{" "}
-      {done === undefined ? (
-        <span className="dl__state">Checking…</span>
-      ) : done === null ? (
-        <span className="dl__state">
-          <span aria-hidden="true">? </span>Could not be checked
-        </span>
-      ) : done ? (
-        <span className="dl__state dl__state--done">
-          <span aria-hidden="true">✓ </span>Downloaded
-        </span>
-      ) : (
-        <span className="dl__state">
-          <span aria-hidden="true">○ </span>Not downloaded yet
-        </span>
-      )}
-    </li>
-  );
-
   const eligible = Boolean(status?.purge_eligible);
   const dialog = confirming && eligible && (
     <ConfirmDialog
@@ -212,25 +187,36 @@ export function DownloadStatus({
     );
   }
 
+  // On the review page: the optional downloads (the children) and the way to delete, in one group on
+  // the right of the main button. The delete button is styled like the downloads and unlocks once the
+  // one-page canvas has been downloaded or the submission has been emailed.
   return (
-    <section className="dl card" aria-labelledby="dl-heading">
-      <h2 id="dl-heading">{copy.heading}</h2>
+    <section className="dl dl--inline" aria-labelledby="dl-heading">
+      <h2 id="dl-heading" className="sr-only">
+        {copy.heading}
+      </h2>
       {children}
-      <ul className="dl__list">{row("One-page canvas", state.phase === "failed" ? null : known?.canvas_downloaded)}</ul>
-
+      <button
+        type="button"
+        className="button--secondary dl__stop"
+        disabled={!eligible}
+        aria-describedby={eligible ? undefined : "dl-stop-hint"}
+        title={eligible ? undefined : copy.lockedHint}
+        onClick={() => setConfirming(true)}
+      >
+        {copy.open}
+      </button>
+      {stopHint}
       {state.phase === "failed" && (
-        <p role="alert" className="notice">
+        <p role="alert" className="notice dl__wide">
           {copy.failedCheck}{" "}
           <button type="button" className="button--secondary" onClick={() => void refresh()}>
             Check again
           </button>
         </p>
       )}
-
-      {stopButton}
-      {stopHint}
       {notice && (
-        <p role="alert" className="notice">
+        <p role="alert" className="notice dl__wide">
           {notice}
         </p>
       )}

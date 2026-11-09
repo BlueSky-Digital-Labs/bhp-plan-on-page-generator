@@ -111,6 +111,12 @@ export function ReviewScreen({
     onAccessLost,
   });
 
+  // A successful submission unlocks deleting, like a download: read the status again.
+  const emailSent = email.sent;
+  useEffect(() => {
+    if (emailSent) setDownloadAttempts((n) => n + 1);
+  }, [emailSent]);
+
   if (state.phase === "loading") return <Loading label="Preparing your canvas…" />;
   if (state.phase === "error") return <ErrorNotice error={state.error} onRetry={() => void load()} />;
   if (state.phase === "incomplete") {
@@ -188,21 +194,32 @@ export function ReviewScreen({
         )}
         {confirmed && (
           <>
-            <DownloadMenu
-              label="Download canvas"
-              choices={CANVAS_CHOICES}
-              busy={busy === "canvas"}
-              onChoose={(key) => void getCanvas(key as CanvasFormat)}
-            />
-            <DownloadMenu
-              label="Download appendix"
-              choices={APPENDIX_CHOICES}
-              busy={busy === "appendix"}
-              onChoose={(key) => void getAppendix(key as AppendixFormat)}
-            />
-            <button type="button" onClick={() => void email.submit()} disabled={email.sending}>
+            <button type="button" className="review-actions__main" onClick={() => void email.submit()} disabled={email.sending}>
               {email.sending ? "Submitting…" : "Submit by email"}
             </button>
+            {/* The optional actions, to the right and in a quieter colour. */}
+            <DownloadStatus
+              revision={revision}
+              refreshKey={downloadAttempts}
+              onOutOfDate={outOfDate}
+              onPurged={onPurged}
+              onAccessLost={onAccessLost}
+            >
+              <DownloadMenu
+                label="Download canvas"
+                secondary
+                choices={CANVAS_CHOICES}
+                busy={busy === "canvas"}
+                onChoose={(key) => void getCanvas(key as CanvasFormat)}
+              />
+              <DownloadMenu
+                label="Download appendix"
+                secondary
+                choices={APPENDIX_CHOICES}
+                busy={busy === "appendix"}
+                onChoose={(key) => void getAppendix(key as AppendixFormat)}
+              />
+            </DownloadStatus>
           </>
         )}
       </div>
@@ -222,34 +239,20 @@ export function ReviewScreen({
         </section>
       )}
 
-      {confirmed && (
-        <DownloadStatus
-          revision={revision}
-          refreshKey={downloadAttempts}
-          onOutOfDate={outOfDate}
-          onPurged={onPurged}
-          onAccessLost={onAccessLost}
-        />
-      )}
-
-      <section className="readback card" aria-labelledby="readback-heading">
-        <h2 id="readback-heading">Check your canvas</h2>
-        <p>
-          Read every section below. You are responsible for the facts being right
-          {typeof priority === "string" && priority ? (
-            <>
-              {" "}
-              and for the priority, <strong>{priority}</strong>, which is the one you chose
-            </>
-          ) : null}
-          . {confirmed ? "" : "If anything is wrong, go back and tell the assistant what to change, before you confirm."}
-        </p>
-        {confirmed ? (
-          <p role="status" className="readback__done readback__done--small">
-            You confirmed this version, so it is final. Download it or submit it by email with the buttons above.
-            Submitting emails both PDFs to one fixed address.
+      {/* Once confirmed there is nothing left to read or decide here, so the read-back card goes. */}
+      {!confirmed && (
+        <section className="readback card" aria-labelledby="readback-heading">
+          <h2 id="readback-heading">Check your canvas</h2>
+          <p>
+            Read every section below. You are responsible for the facts being right
+            {typeof priority === "string" && priority ? (
+              <>
+                {" "}
+                and for the priority, <strong>{priority}</strong>, which is the one you chose
+              </>
+            ) : null}
+            . If anything is wrong, go back and tell the assistant what to change, before you confirm.
           </p>
-        ) : (
           <div className="readback__actions">
             <button type="button" onClick={() => void confirm()} disabled={confirming}>
               {confirming ? "Confirming…" : "Yes, this is correct"}
@@ -258,13 +261,18 @@ export function ReviewScreen({
               Something is wrong: go back and correct it
             </button>
           </div>
-        )}
-        {notice && (
-          <p role="alert" className="notice">
-            {notice}
-          </p>
-        )}
-      </section>
+          {notice && (
+            <p role="alert" className="notice">
+              {notice}
+            </p>
+          )}
+        </section>
+      )}
+      {confirmed && notice && (
+        <p role="alert" className="notice">
+          {notice}
+        </p>
+      )}
 
       <OnePager canvas={canvas} />
     </>

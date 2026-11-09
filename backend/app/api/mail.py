@@ -111,5 +111,11 @@ def send_email(
         sent = True
     finally:
         mail.limiter.finish(session.session_id, session.expires_at, sent=sent)
+    # The documents have left the building, so the session may now be deleted, as after a download.
+    for kind in ("canvas", "appendix"):
+        try:
+            service.record_delivery(session, kind, snapshot.revision)
+        except Exception as exc:  # noqa: BLE001 - the email is sent; only the unlock is lost
+            logger.error("delivery_not_recorded", extra={"exception_type": type(exc).__name__})
     logger.info("email_sent", extra={"detail": "recipients=1"})
     return {"sent": 1}
