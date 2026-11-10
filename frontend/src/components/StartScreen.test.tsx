@@ -30,6 +30,7 @@ describe("StartScreen content", () => {
     expect(text).toMatch(/Australian-hosted/);
     expect(text).toMatch(/purge your session/i);
     expect(text).toMatch(/24 hours/);
+    expect(text).toMatch(/15 minutes/);
     expect(text).toMatch(/even if you close the browser/i);
     expect(text).toMatch(/cannot be recovered/i);
   });

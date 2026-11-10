@@ -9,7 +9,16 @@ import re
 from enum import StrEnum
 from typing import Any
 
-PRIORITIES = ("Low", "Medium", "High", "Strategic")
+# The user's own choice, and only ever one of these three.
+PRIORITIES = ("Must-have", "Nice-to-have", "Exploratory")
+
+
+def priority_key(text: str) -> str:
+    """A priority (or a user's wording of one) in a comparable form: "must have" and "Must-have"
+    are the same, and so are "nice to have" and "Nice-to-have"."""
+    return re.sub(r"[\s_-]+", " ", text.casefold()).strip()
+
+
 OPPORTUNITY_TYPES = (
     "Find Information",
     "Generate Reports",
@@ -104,7 +113,7 @@ def clean_value(field: str, raw: Any) -> str | list[str] | None:
         return None
     text = re.sub(r"\s+", " ", raw).strip()
     if field == "priority":
-        return next((p for p in PRIORITIES if p.casefold() == text.casefold()), None)
+        return next((p for p in PRIORITIES if priority_key(p) == priority_key(text)), None)
     return text if 0 < len(text) <= MAX_TEXT else None
 
 

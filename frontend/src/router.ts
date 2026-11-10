@@ -10,7 +10,7 @@ export const ROUTES = {
   canvas: "/canvas", // the original template form, kept reachable but not linked
 } as const;
 
-export type Notice = "access_required" | "session_deleted";
+export type Notice = "access_required" | "session_deleted" | "session_stopped" | "session_idle";
 export type NavigateOptions = { replace?: boolean; notice?: Notice };
 
 export function navigate(to: string, { replace = false, notice }: NavigateOptions = {}) {
@@ -41,7 +41,12 @@ export function usePath(): string {
 // One-time hint left by a redirect, e.g. "your access expired". Never carries user content.
 export function readNotice(): Notice | null {
   const state = window.history.state as { notice?: unknown } | null;
-  return state?.notice === "access_required" || state?.notice === "session_deleted" ? state.notice : null;
+  return state?.notice === "access_required" ||
+    state?.notice === "session_deleted" ||
+    state?.notice === "session_stopped" ||
+    state?.notice === "session_idle"
+    ? state.notice
+    : null;
 }
 
 // The server names where to go after a session is created. Only an in-app path is followed;

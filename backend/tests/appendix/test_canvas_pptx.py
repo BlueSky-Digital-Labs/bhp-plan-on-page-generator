@@ -14,7 +14,7 @@ from tests.interview.test_interview_api import history, wire
 FIELDS = {
     "solutionName": "Shift Notes Assistant",
     "team": "Operations",
-    "priority": "High",
+    "priority": "Must-have",
     "opportunityTypes": ["Find Information", "Generate Reports"],
     "currentProcess": "Supervisors copy shift notes between three spreadsheets.",
     "painPoints": "It takes hours; details get lost. Zoë’s café — Ωmega, Привет",
@@ -59,7 +59,7 @@ def test_it_is_editable_text_and_shapes_not_a_picture():
 
 def test_the_selected_priority_and_opportunity_types_are_marked():
     text = slide_text(open_deck(render_canvas_pptx(FIELDS)).slides[0])
-    assert "■ High" in text and "□ Low" in text and "□ Strategic" in text
+    assert "■ Must-have" in text and "□ Nice-to-have" in text and "□ Exploratory" in text
     assert "■ Find Information" in text and "■ Generate Reports" in text
     assert "□ Predict Issues" in text and "□ Automate Workflows" in text
 
@@ -107,7 +107,7 @@ def test_long_answers_shrink_to_fit_the_panel_and_stay_readable_on_one_slide():
         for k in FIELDS
         if k not in ("priority", "opportunityTypes")
     }
-    long.update(priority="High", opportunityTypes=["Find Information"])
+    long.update(priority="Must-have", opportunityTypes=["Find Information"])
     deck = open_deck(render_canvas_pptx(long))
     assert len(deck.slides) == 1
     small, large = sizes(deck.slides[0]), sizes(open_deck(render_canvas_pptx(FIELDS)).slides[0])
@@ -140,15 +140,25 @@ def canvas_file(client, fmt="pptx", revision=None):
     return client.get("/api/canvas-file", params={"format": fmt, "revision": revision})
 
 
-def test_an_incomplete_canvas_cannot_be_downloaded_as_a_deck(world):
+def test_with_nothing_answered_there_is_nothing_to_download(world):
     wire(world)
     client = browser(world)
-    assert canvas_file(client).status_code == 409
-    from tests.interview.test_interview_api import say
-
-    say(client, OPENING)
     response = canvas_file(client)
-    assert response.status_code == 409 and response.json()["error"]["code"] == "canvas_not_ready"
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "nothing_to_download"
+
+
+@pytest.mark.parametrize("fmt", ["pdf", "pptx"])
+def test_an_unfinished_canvas_downloads_as_a_draft_with_the_answers_so_far(world, fmt):
+    from tests.interview.test_interview_api import history, say
+
+    wire(world)
+    client = browser(world)
+    say(client, OPENING)
+    assert history(client)["canvas"]["ready_for_review"] is False
+    response = canvas_file(client, fmt)
+    assert response.status_code == 200 and response.content
+    assert "-canvas-draft-r" in response.headers["content-disposition"]
 
 
 def test_a_ready_canvas_downloads_as_a_deck_matching_the_stored_draft(world):
@@ -194,4 +204,4 @@ def test_the_appendix_routes_are_unaffected(world, fmt):
     wire(world)
     client = browser(world)
     finish(client)
-    assert _appendix(client, fmt).status_code == 409  # not confirmed yet
+    assert _appendix(client, fmt).status_code == 200  # no confirmation needed to save it

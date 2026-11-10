@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   type Conversation,
   type Phase,
@@ -17,6 +17,8 @@ import {
 } from "../api/attachments";
 import { CanvasPanel } from "./CanvasPanel";
 import { navigate, ROUTES } from "../router";
+import { ChoiceAnswer } from "./ChoiceAnswer";
+import { SaveProgress } from "./SaveProgress";
 import { Loading } from "./Loading";
 
 const MAX_ANSWER_CHARS = 4000;
@@ -36,6 +38,7 @@ const SUBMIT_MESSAGES: Record<string, string> = {
     "Your conversation has changed since you opened it, perhaps in another tab. Reload to see the latest, then send your answer again.",
   turn_in_progress: "The assistant has not finished replying to your last answer. Get that reply first.",
   conversation_full: "This conversation has reached its limit.",
+  canvas_confirmed: "You confirmed this canvas, so it can no longer be changed.",
 };
 const UNSURE_SAVED =
   "We could not confirm that your answer was saved. Try sending it again: it will not be added twice.";
@@ -48,6 +51,7 @@ const PHASE_LABELS: Record<Phase, string | null> = {
   interview: null,
   clarification: "Clarifying a detail",
   data_and_systems: "Checking data and systems",
+  changing: "Changing an answer",
   review_ready: "Ready to review",
 };
 
@@ -126,6 +130,7 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
   const [attachment, setAttachment] = useState<Attachment | null>(null);
   const [attaching, setAttaching] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
+  const [typeOwn, setTypeOwn] = useState(false); // chose to type instead of picking from the offered list
   const fileInput = useRef<HTMLInputElement>(null);
 
   // What is sent: what was typed, then the attached file's text, as one answer.
@@ -208,12 +213,15 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
     [handleError, refresh],
   );
 
-  async function send(event?: { preventDefault(): void }) {
+  // `picked` is the wording of option(s) chosen from an offered list; otherwise the typed answer. With
+  // neither, a retry after a failed send reuses what was being sent.
+  async function send(event?: { preventDefault(): void }, picked?: string) {
     event?.preventDefault();
-    if (sending || !history || !composed.trim()) return;
+    const text = picked ?? (composed.trim() ? composed : (submission.current?.text ?? ""));
+    if (sending || !history || !text.trim()) return;
     // Same text => same id (a retry). Edited text => a new answer, so a new id.
-    if (!submission.current || submission.current.text !== composed) {
-      submission.current = { id: newSubmissionId(), text: composed };
+    if (!submission.current || submission.current.text !== text) {
+      submission.current = { id: newSubmissionId(), text };
     }
     followNewest.current = true;
     setSending(true);
@@ -223,7 +231,7 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
       const result = await submitTurn({
         submissionId: submission.current.id,
         expectedRevision: history.revision,
-        text: composed,
+        text,
       });
       submission.current = null;
       if (mounted.current) {
@@ -241,6 +249,24 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
     } finally {
       if (mounted.current) setSending(false);
     }
+  }
+
+  // A confirmed canvas is final: the conversation cannot be reopened (browser Back, or a typed address).
+  const confirmedFinal = history !== null && history.confirmed_revision != null && history.confirmed_revision === history.revision;
+  useEffect(() => {
+    if (confirmedFinal) navigate(ROUTES.review, { replace: true });
+  }, [confirmedFinal]);
+
+  // A new question starts with its choices again, whichever way the last one was answered.
+  const questionKey = history?.progression?.outstanding_question?.text ?? "";
+  useEffect(() => setTypeOwn(false), [questionKey]);
+
+  // Enter sends, but only when there is something to send; Shift+Enter starts a new line. Nothing
+  // happens while an input method is composing text (e.g. choosing a character).
+  function onAnswerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    if (composed.trim() && !blocked) void send();
   }
 
   async function attach(file: File | undefined) {
@@ -302,11 +328,42 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
   const visibleTurns = turns.filter((t) => t.role === "user" || t.status === "complete");
   const firstAnswer = turns.length === 0;
   const blocked = sending || streaming || Boolean(unfinished);
+  // Someone who cannot finish now may save what they have and stop: offered once there is at least
+  // one answer, while the canvas is still incomplete (a finished one goes to the review page).
+  const saveVisible =
+    !blocked &&
+    history?.canvas?.ready_for_review !== true &&
+    turns.some((t) => t.role === "user" && t.status === "complete");
+  // The side column (the canvas checklist, and the way to save and stop) appears once an answer is in
+  // and stays, so the chat does not jump about as replies come and go.
+  const showAside = !firstAnswer;
+  const canvasReady = history?.canvas?.ready_for_review === true;
   const submitMessage = submitError ? (SUBMIT_MESSAGES[submitError.code] ?? UNSURE_SAVED) : null;
+  // A question with a fixed list of answers is picked from, not typed, once the assistant has asked it
+  // and nothing else is under way. The server names the list; typing instead is one click away.
+  const outstanding = history?.progression?.outstanding_question ?? null;
+  const lastTurn = turns[turns.length - 1];
+  const choices =
+    !blocked &&
+    !typeOwn &&
+    !attachment &&
+    lastTurn?.role === "assistant" &&
+    lastTurn.status === "complete" &&
+    outstanding?.choices
+      ? outstanding.choices
+      : null;
+
+  // Once the server says every answer is in and the assistant has said so, the way forward sits in the
+  // chat under that message. The answer box stays, in case there is more to add.
+  const readyToGenerate =
+    !blocked &&
+    history?.canvas?.ready_for_review === true &&
+    lastTurn?.role === "assistant" &&
+    lastTurn.status === "complete";
 
   return (
-    <div className="conversation-layout">
-      <div className="conversation-main">
+    <div className={firstAnswer ? "conversation conversation--start" : "conversation"}>
+      <div className="conversation-head">
         <h1>Describe your idea</h1>
         {firstAnswer && (
           <p>
@@ -314,7 +371,29 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
             template first.
           </p>
         )}
+      </div>
 
+      {/* Nothing but the chat until the conversation starts. Then the checklist and the save-and-stop card
+          sit beside it (below it on a phone). */}
+      <div className={showAside ? "conversation-top conversation-top--aside" : "conversation-top"}>
+        {showAside && (
+          <aside className="conversation-aside" aria-label="Your progress">
+            <CanvasPanel canvas={history?.canvas} />
+            {saveVisible && history ? (
+              <SaveProgress
+                revision={history.revision}
+                onStopped={() => navigate(ROUTES.entry, { replace: true, notice: "session_stopped" })}
+                onAccessLost={onAccessLost}
+                onOutOfDate={() => void refresh()}
+              />
+            ) : (
+              !canvasReady && (
+                <p className="conversation-aside__wait">You can save and stop here once the assistant has replied.</p>
+              )
+            )}
+          </aside>
+        )}
+        <div className="conversation-main">
         <section className="chat" aria-label="Chat with the assistant">
           <header className="chat__header">
             <span className="chat__pill">
@@ -402,7 +481,8 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
                 <div className="actions">
                   {submitError.code !== "revision_conflict" &&
                     submitError.code !== "turn_in_progress" &&
-                    submitError.code !== "conversation_full" && (
+                    submitError.code !== "conversation_full" &&
+                    submitError.code !== "canvas_confirmed" && (
                       <button type="button" onClick={() => void send()}>
                         Try sending again
                       </button>
@@ -441,53 +521,74 @@ export function ConversationScreen({ onAccessLost }: { onAccessLost: () => void 
                 {attachError}
               </p>
             )}
-            <form onSubmit={(e) => void send(e)} className="answer-form composer">
-              <input
-                ref={fileInput}
-                type="file"
-                accept={ATTACHMENT_ACCEPT}
-                className="sr-only"
-                tabIndex={-1}
-                aria-hidden="true"
-                data-testid="file-input"
-                onChange={(e) => void attach(e.target.files?.[0])}
+            {readyToGenerate && (
+              <div className="generate-offer">
+                <button type="button" onClick={() => navigate(ROUTES.review)}>
+                  Generate canvas
+                </button>
+                <p className="field__help">Or add anything else below first.</p>
+              </div>
+            )}
+            {choices ? (
+              <ChoiceAnswer
+                choices={choices}
+                disabled={blocked}
+                sending={sending}
+                onSend={(text) => void send(undefined, text)}
+                onTypeOwn={() => setTypeOwn(true)}
               />
-              <button
-                type="button"
-                className="composer__attach"
-                aria-label="Attach a file (PDF, Word, PowerPoint or JSON)"
-                title="Attach a file"
-                onClick={() => fileInput.current?.click()}
-                disabled={blocked || attaching}
-              >
-                <PaperclipIcon />
-              </button>
-              <label htmlFor="answer" className="sr-only">
-                {firstAnswer ? "Describe your idea" : "Your answer"}
-              </label>
-              <textarea
-                id="answer"
-                name="answer"
-                rows={2}
-                maxLength={MAX_ANSWER_CHARS}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                placeholder={firstAnswer ? "Describe your idea in your own words…" : "Type your answer…"}
-                aria-describedby="answer-help"
-              />
-              <button type="submit" disabled={blocked || !composed.trim()}>
-                {sending ? "Sending…" : "Send"}
-              </button>
-            </form>
-            <p id="answer-help" className="field__help">
-              Up to {MAX_ANSWER_CHARS} characters. You can also attach one PDF, Word, PowerPoint or JSON file
-              (up to {MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB): its text is sent with your answer, as if you had typed
-              it. Do not include passwords or personal details.
-            </p>
+            ) : (
+              <>
+              <form onSubmit={(e) => void send(e)} className="answer-form composer">
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept={ATTACHMENT_ACCEPT}
+                  className="sr-only"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  data-testid="file-input"
+                  onChange={(e) => void attach(e.target.files?.[0])}
+                />
+                <button
+                  type="button"
+                  className="composer__attach"
+                  aria-label="Attach a file (PDF, Word, PowerPoint or JSON)"
+                  title="Attach a file"
+                  onClick={() => fileInput.current?.click()}
+                  disabled={blocked || attaching}
+                >
+                  <PaperclipIcon />
+                </button>
+                <label htmlFor="answer" className="sr-only">
+                  {firstAnswer ? "Describe your idea" : "Your answer"}
+                </label>
+                <textarea
+                  id="answer"
+                  name="answer"
+                  rows={2}
+                  maxLength={MAX_ANSWER_CHARS}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={onAnswerKey}
+                  placeholder={firstAnswer ? "Describe your idea…" : "Type your answer…"}
+                  aria-describedby="answer-help"
+                />
+                <button type="submit" disabled={blocked || !composed.trim()}>
+                  {sending ? "Sending…" : "Send"}
+                </button>
+              </form>
+              <p id="answer-help" className="field__help">
+                Press Enter to send, or Shift+Enter for a new line. Up to {MAX_ANSWER_CHARS} characters. You can also attach one PDF, Word, PowerPoint or JSON file
+                (up to {MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB): its text is sent with your answer, as if you had typed
+                it. Do not include passwords or personal details.
+              </p>
+              </>
+            )}
           </div>
         </section>
+        </div>
       </div>
-      <CanvasPanel canvas={history?.canvas} onGenerate={() => navigate(ROUTES.review)} />
     </div>
   );
 }

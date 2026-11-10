@@ -4,8 +4,14 @@ Turns what a user says into canvas fields and asks for what is missing, **one qu
 turn**. Code: `backend/app/interview/`. It plugs into the conversation stream
 ([conversation.md](conversation.md)) and adds no new endpoint: `GET /api/conversation` now also
 returns the draft as `canvas: {fields, missing_required, ready_for_review}` and the interview's
-position as `progression` (below), and the conversation screen shows the draft beside the
-transcript.
+position as `progression` (below). The conversation screen starts as one centred chat box. Once the first answer is in, the page
+widens and a side column appears next to the chat (below it on a phone): **Your canvas so far** is a
+checklist of the 16 fields, a tick for each one with an answer (never the answers themselves), in a
+small keyboard-scrollable box with a progress bar; under it, while the canvas is unfinished, the **save
+progress** card ([downloads.md](downloads.md)): two download buttons and a Stop session button. While a
+reply is coming the card's place stays and says saving is available once the assistant has replied.
+When the server says the canvas is ready and the assistant has sent its closing message, a
+**Generate canvas** button appears in the chat under that message; the answer box stays.
 
 ## How a turn works
 
@@ -46,16 +52,69 @@ data or systems being mentioned in passing, so an initial description cannot ski
 the answer text. The conversation screen shows the phase as a small label (fixed copy keyed on
 the enum).
 
+### Questions with a fixed list of answers
+
+Two fields are answered from a fixed list: **Priority** (exactly one of Must-have, Nice-to-have,
+Exploratory) and **Opportunity types** (one or more of Find Information, Generate Reports, Predict
+Issues, Recommend Actions, Analyse Data, Automate Workflows). For these, `outstanding_question`
+also carries `choices: {"multiple": bool, "options": [...]}` (`choices_for` in `engine.py`, from the
+same lists the validator accepts); for every other question `choices` is `null`.
+
+The conversation screen shows the options as radio buttons (or checkboxes) with a **Send** button
+instead of the text box (`ChoiceAnswer.tsx`), and a **Type my own answer instead** button to go back
+to the text box. Picking sends the option's own wording ("Must-have", or "Find Information, Predict
+Issues" in the list's order) through the normal answer route, so it is exactly the user's typed
+answer and every rule below still applies, including that the priority is only ever the user's own
+explicit choice. The list is offered only when the question asks for the field itself ("missing",
+or asked again because the answer was unclear) and the assistant has finished replying; the
+priority follow-up ("why that priority?") and a choice between an earlier and a new value are
+typed. The browser has no copy of the lists: it shows whatever the server sends.
+
+### Changing something after "That's everything I need"
+
+The user can keep talking until they confirm the canvas on the review page, and does not have to
+remember a field or an option (`amend.py`, deterministic, no model involved in choosing the part):
+
+* **They name one part without a new answer** ("I want to update the opportunity"): the assistant asks
+  for the new answer to that part only ("Okay. Right now Opportunity type is …. Which ones would you
+  like instead?"). For Priority and Opportunity type the options are shown again as a selection.
+* **They name no part, or several, or it is unclear** ("can you fix something?"): the assistant asks
+  "Which part would you like to change?" with all 16 parts as a selection (a small scrolling list), or
+  they can type it in their own words. Picking one goes to the step above.
+* **The new answer replaces the old one** (no confirmation question: asking to change it
+  is the consent). A priority must still be one of the three; opportunity types are replaced, not
+  added to. Nothing else changes.
+* **"No", "never mind", "cancel" or a thank-you** leaves the canvas as it was and returns to ready; so
+  do two replies in a row that cannot be understood. "No, I meant the team" switches to the team.
+* While this is open the phase is `changing` ("Changing an answer") and the canvas is not ready, so
+  **Generate canvas** is hidden until it is settled.
+* **A message that already gives the new value** ("Change the team to Finance", "Update the priority
+  to Nice-to-have") is applied at once, with "Done, I've updated Team." and no question: after
+  "that's everything" it is a request, not a contradiction. "Also add …" / "plus …" adds to what is
+  there (text fields and opportunity types); anything else replaces it. The priority is always
+  replaced, and only when the user's own words say "priority" and name the new one. (In the
+  middle of the interview a different answer to an answered field is still asked about, below.)
+
+Once the user confirms the canvas ("Yes, this is correct"), it is **final**: the server refuses
+further answers (`409 canvas_confirmed`), the review page has no way back to the conversation, and
+`/conversation` goes straight back to the review page. Before confirming, nothing is final.
+
 ## Rules the engine enforces (each has a test)
 
 * Only the 16 canvas ids (same as `frontend/src/canvas/fields.ts`); only the six opportunity
-  types; priority only Low/Medium/High/Strategic. Unsupported fields or values are **rejected,
+  types; priority only Must-have/Nice-to-have/Exploratory (typed as "must have" or "nice to have" is understood too). Unsupported fields or values are **rejected,
   never coerced**; one bad opportunity type rejects the whole update.
 * **Priority is only ever the user's explicit choice**: accepted only while the question being
   answered is the priority question *and* the user's message names that priority.
 * Every fact must cite a real user turn id.
-* A different answer to an already-answered field is not applied: the interviewer asks which to
-  keep (`Earlier you said “…”, but now I heard “…”. Which one should I use?`).
+* A different answer to an already-answered field (in the middle of the interview) is not applied
+  at once: the interviewer confirms it (`You said “…” earlier. Do you want to update it to “…”?`),
+  offered as a **Yes, update it / No, keep my earlier answer** selection. "Yes" (or "sure", "ok")
+  updates it, "No" keeps the earlier answer, and typing either value works too. Anything else
+  asks once more, then the earlier answer is kept and the user is told. For a part with a fixed
+  list (priority, opportunity type) the question is `You chose “…” earlier. Do you want to change it
+  to “…”? Or pick the one you want below.` and **the list is shown again**: picking any option is the
+  answer (the earlier one keeps it, another changes it), and "yes" still means the new one.
 * "I don't know" / "skip" is read deterministically from short replies. For a required field it
   is recorded as uncertainty (never satisfies the validator), the question is rephrased once, then
   the field is revisited after the others. Optional fields are marked declined and never block.
@@ -69,38 +128,42 @@ the enum).
 * Questions are checked (`validate_question`) for exactly one `?`, no list markers, no joined
   requests, no second question word, the selected target's topic, and no other topic's strong
   keywords. A model-written question that fails is never shown; the reviewed template is used.
-* **Questions are direct and about one field, in a colleague's voice** ("What makes the way it
-  works today painful or frustrating?"), with a short tip after some first asks ("A rough working
-  title is fine."). When an answer cannot be used, the follow-up shows how to answer with an
-  example, then asks again ("Tell me the biggest headache, like “it takes two hours and details
-  get lost”. What problem hurts most?").
+* **Questions are specific, lead with concrete things to think about, and ask about one field**
+  ("Which part of the way it works today causes the most problems, such as delays, mistakes or
+  rework?"). After a first ask a short **hint** shows how to answer well, with a synthetic example
+  ("Numbers help, like “two hours every shift” or “three errors a week”."). When an answer cannot
+  be used, the follow-up shows how to answer with an example, then asks again.
 * **Acknowledgements vary** ("Got it.", "That makes sense.", "Good to know.") and are picked from
   the turn number, so the same state always gives the same reply. The rule redirect and the
   contradiction question keep their exact wording.
 * **Opportunity type lists every option** (Find Information, Generate Reports, Predict Issues,
   Recommend Actions, Analyse Data, Automate Workflows) and says more than one is fine. A plain
   answer such as "write the handover report" is mapped to the matching option when it clearly fits.
-* **Priority gets one follow-up**: after the user chooses it, "Why does this deserve High
-  priority? A sentence or two is plenty." The reason is the business case, so it is kept in Business Impact (joined to
+* **Priority has three defined options**: Must-have, Nice-to-have or Exploratory, with a hint that
+  explains each (Must-have: the work really needs it; Nice-to-have: it helps but can wait;
+  Exploratory: worth testing first). The old Low/Medium/High/Strategic values are rejected.
+* **Priority gets one follow-up**: after the user chooses it, "Why did you give this idea the
+  priority “Must-have”? A sentence or two is plenty." The reason is the business case, so it is kept in Business Impact (joined to
   anything already there). Skipping it never blocks anything, and an answered Business Impact is
   not asked again later.
 
-## Prompts and questions (version `2026-11-04.3`)
+## Prompts and questions (version `2026-11-09.1`)
 
-`prompts.py` holds the extractor prompt, an ask and a follow-up for every field, the priority
-follow-up, the dedicated confirmations and the acknowledgements. Representative examples (plain language, no canvas
-labels needed):
+`prompts.py` holds the extractor prompt, an ask, a follow-up and a how-to-answer hint for every field,
+the priority follow-up, the dedicated confirmations and the acknowledgements. Representative examples:
 
-| Target | First ask | Follow-up if the answer could not be used |
+| Target | First ask (then a hint) | Follow-up if the answer could not be used |
 | --- | --- | --- |
-| Solution Name | What would you like to call this idea? (A rough working title is fine.) | A short name like “Shift Notes Assistant” works. What would you call it? |
-| Current Process | Could you walk me through how this work gets done today? | Think of the steps from start to finish, like “copy the notes into a spreadsheet, then email a summary”. How is it done today? |
-| Pain Points | What makes the way it works today painful or frustrating? | Tell me the biggest headache, like “it takes two hours and details get lost”. What problem hurts most? |
+| Current Process | Could you walk me through how this work gets done today, from the first step to the last? (Say who does each step and what they use.) | Think of the steps from start to finish, like “copy the notes into a spreadsheet, then email a summary”. How is it done today? |
+| Pain Points | Which part of the way it works today causes the most problems, such as delays, mistakes or rework? (Numbers help.) | Tell me the biggest headache, like “it takes two hours and details get lost”. What problem hurts most? |
+| Success | What is one change you would notice that tells you this is working? (Something you could see or count.) | Think of one change you'd notice, like “handover takes minutes and nothing is missed”. What would success look like? |
+| Data | What data or documents would it need to read, such as logs, reports or records? | Name the records or documents involved, like “shift logs and incident reports”. What data would it need? |
+| Risks | What risks or dependencies could stop this from working, such as approvals, sensitive information or other groups? | Name the one thing most likely to cause trouble, like “notes may contain sensitive details”. What risk worries you most? |
 | Opportunity type | What kind of help do you want from AI: Find Information, …, or Automate Workflows? (You can pick more than one.) | Pick whichever fits best, like “Find Information and Generate Reports”. Which of these fit: …? |
+| Priority | What priority would you give this idea: Must-have, Nice-to-have or Exploratory? (Must-have means the work really needs it, Nice-to-have means it helps but can wait, Exploratory means it is worth testing first.) | It's your call. Which priority fits: Must-have, Nice-to-have or Exploratory? |
+| Priority (follow-up) | Why did you give this idea the priority “Must-have”? (A sentence or two is plenty.) | |
+| Business Impact (optional) | What difference would this make for the business, in time saved, cost, safety or quality? | It's fine to say you don't know. Roughly, what would improve for the business? |
 | Data (confirmation) | I have “…” down as the data so far. Is there any other data it would need? | |
-| Priority | What priority would you give this idea: Low, Medium, High or Strategic? | It's your call. Which priority fits: Low, Medium, High or Strategic? |
-| Priority (follow-up) | Why does this deserve High priority? (A sentence or two is plenty.) | |
-| Business Impact (optional) | What difference would this make for the business, if you can say? | It's fine to say you don't know. Roughly, what would improve for the business? |
 
 Changing any wording means bumping `PROMPT_VERSION`; the tests check that every template passes
 the one-question checker. The templates hold only instructions and synthetic examples.
@@ -147,6 +210,6 @@ screen with the scripted `test` producer; the guided interview itself needs the 
 * **Real-model checks**: the model path has not run live: no Bedrock smoke test, no review round of generated questions,
   and no prompt regression matrix beyond the templates and the stubbed-stream tests. Do these
   before enabling `interviewer_bedrock` anywhere real.
-* **Durable storage**: interview state is in process memory like the conversation store; deployed
-  runs fail closed until both have a durable store.
+* **Durable storage**: interview state is in process memory locally; deployed it is the `INTERVIEW`
+  item in the DynamoDB table (`DynamoInterviewStore`, [downloads.md](downloads.md)).
 * **Not built**: scoring, backlog submission, PDF, read-back confirmation, panel-sized writing.

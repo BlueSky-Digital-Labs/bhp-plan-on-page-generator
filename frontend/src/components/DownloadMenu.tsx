@@ -13,11 +13,13 @@ export function DownloadMenu({
   choices,
   busy,
   onChoose,
+  secondary = false,
 }: {
   label: string;
   choices: MenuChoice[];
   busy: boolean;
   onChoose: (key: string) => void;
+  secondary?: boolean; // the quieter, outlined look, for an optional action
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -78,6 +80,7 @@ export function DownloadMenu({
     <div className="menu" ref={root}>
       <button
         type="button"
+        className={secondary ? "button--secondary" : undefined}
         ref={trigger}
         aria-haspopup="menu"
         aria-expanded={open}

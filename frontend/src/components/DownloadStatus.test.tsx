@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DownloadStatus } from "./DownloadStatus";
@@ -16,8 +16,8 @@ const status = (canvas: boolean, appendix: boolean, extra: Record<string, unknow
     revision: 3,
     canvas_downloaded: canvas,
     appendix_downloaded: appendix,
-    purge_eligible: canvas && appendix,
-    lock_reason: canvas && appendix ? null : canvas ? "appendix_not_downloaded" : appendix ? "canvas_not_downloaded" : "both_not_downloaded",
+    purge_eligible: canvas, // the one-page canvas alone unlocks it; the appendix never holds it back
+    lock_reason: canvas ? null : "canvas_not_downloaded",
     ...extra,
   });
 
@@ -25,84 +25,66 @@ function setup(routes: Routes, refreshKey = 0, revision = 3) {
   const api = mockApi({ "GET /api/csrf": csrfRoute, ...routes });
   const handlers = { onOutOfDate: vi.fn(), onPurged: vi.fn(), onAccessLost: vi.fn() };
   const view = render(<DownloadStatus revision={revision} refreshKey={refreshKey} {...handlers} />);
-  return { ...api, ...handlers, ...view };
+  // What a download attempt does on the page: bump the key, so the status is read again.
+  const readAgain = (key: number) =>
+    view.rerender(<DownloadStatus revision={revision} refreshKey={key} {...handlers} />);
+  return { ...api, ...handlers, ...view, readAgain };
 }
 
 const reads = (calls: Array<{ key: string }>) => calls.filter((c) => c.key === "GET /api/downloads").length;
 const deleteButton = () => screen.queryByRole("button", { name: /^Delete my session/ });
-const rowText = (name: string) => screen.getByText(name).closest("li")!;
+// The button is always there; it unlocks when the server says the one-page canvas was sent.
+const enabledDelete = async () => {
+  await waitFor(() => expect(deleteButton()).toBeEnabled());
+  return deleteButton()!;
+};
+// Waits until the status has been read and shown.
+const settled = async (calls: Array<{ key: string }>) => {
+  await waitFor(() => expect(reads(calls)).toBeGreaterThan(0));
+  await act(async () => {});
+};
 
 describe("DownloadStatus: the state matrix", () => {
-  it("shows both documents as not downloaded, says deleting is locked and names both", async () => {
-    setup({ "GET /api/downloads": status(false, false) });
-    expect(await screen.findByText(/Deleting is locked/)).toBeInTheDocument();
-    expect(rowText("One-page canvas (PDF)")).toHaveTextContent("Not downloaded yet");
-    expect(rowText("Appendix (PDF)")).toHaveTextContent("Not downloaded yet");
-    expect(screen.getByText(/Still to download: the one-page canvas \(PDF\) and the appendix \(PDF\)\./)).toBeInTheDocument();
-    expect(deleteButton()).not.toBeInTheDocument();
+  it("shows the canvas as not downloaded and keeps deleting locked, with no long explanation", async () => {
+    const { calls } = setup({ "GET /api/downloads": status(false, false) });
+    await settled(calls);
+    expect(deleteButton()).toBeDisabled();
+    expect(deleteButton()).toHaveAccessibleDescription("Download the one-page canvas, or submit it by email, first.");
+    expect(screen.queryByText(/Deleting is locked|Still to download|Save the documents/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh status" })).not.toBeInTheDocument();
   });
 
-  it("shows the canvas as downloaded and names only the appendix as outstanding", async () => {
+  it("offers deleting as soon as the canvas is downloaded, without the appendix", async () => {
     setup({ "GET /api/downloads": status(true, false) });
-    await screen.findByText(/Deleting is locked/);
-    expect(rowText("One-page canvas (PDF)")).toHaveTextContent("Downloaded");
-    expect(rowText("Appendix (PDF)")).toHaveTextContent("Not downloaded yet");
-    expect(screen.getByText("Still to download: the appendix (PDF).")).toBeInTheDocument();
-    expect(deleteButton()).not.toBeInTheDocument();
+    await enabledDelete();
   });
 
-  it("shows the appendix as downloaded and names only the canvas as outstanding", async () => {
-    setup({ "GET /api/downloads": status(false, true) });
-    await screen.findByText(/Deleting is locked/);
-    expect(rowText("One-page canvas (PDF)")).toHaveTextContent("Not downloaded yet");
-    expect(rowText("Appendix (PDF)")).toHaveTextContent("Downloaded");
-    expect(screen.getByText("Still to download: the one-page canvas (PDF).")).toBeInTheDocument();
-    expect(deleteButton()).not.toBeInTheDocument();
+  it("does not unlock on the appendix alone", async () => {
+    const { calls } = setup({ "GET /api/downloads": status(false, true) });
+    await settled(calls);
+    expect(deleteButton()).toBeDisabled();
   });
 
-  it("offers deleting only when the server says both are downloaded", async () => {
-    setup({ "GET /api/downloads": status(true, true) });
-    expect(await screen.findByRole("status")).toHaveTextContent("Both PDFs have been downloaded");
-    expect(rowText("One-page canvas (PDF)")).toHaveTextContent("Downloaded");
-    expect(rowText("Appendix (PDF)")).toHaveTextContent("Downloaded");
-    expect(screen.queryByText(/Deleting is locked/)).not.toBeInTheDocument();
-    expect(deleteButton()).toBeInTheDocument();
-  });
-
-  it.each(["not_confirmed", "not_ready", "turn_in_progress"])("explains a %s lock without naming a document", async (reason) => {
-    setup({ "GET /api/downloads": status(false, false, { lock_reason: reason }) });
-    expect(await screen.findByText("The current canvas must be confirmed and both PDFs downloaded first.")).toBeInTheDocument();
-    expect(screen.queryByText(/Still to download/)).not.toBeInTheDocument();
-  });
-
-  it("says in words, not only by colour or symbol, what each state is", async () => {
-    setup({ "GET /api/downloads": status(true, false) });
-    await screen.findByText(/Deleting is locked/);
-    const list = within(screen.getByRole("list"));
-    expect(list.getByText(/Downloaded/)).toBeInTheDocument();
-    expect(list.getByText(/Not downloaded yet/)).toBeInTheDocument();
-  });
-
-  it("reminds the user to save both PDFs and does not claim the download proves saving or submission", async () => {
-    setup({ "GET /api/downloads": status(false, false) });
-    const help = await screen.findByText(/Save both PDFs somewhere you can find them/);
-    expect(help).toHaveTextContent("It cannot check that the file was saved on your device");
-    expect(help).toHaveTextContent("nothing is submitted to a backlog");
-    expect(help).toHaveTextContent("does not download the file again");
-    expect(document.body).not.toHaveTextContent(/\b(saved to your|submitted to the)\b/i);
+  it.each(["not_confirmed", "not_ready", "turn_in_progress"])("keeps deleting locked for a %s lock", async (reason) => {
+    const { calls } = setup({ "GET /api/downloads": status(false, false, { lock_reason: reason }) });
+    await settled(calls);
+    expect(deleteButton()).toBeDisabled();
   });
 });
 
 describe("DownloadStatus: refreshing", () => {
-  it("re-reads on the manual button, and only reads: nothing is downloaded or sent", async () => {
-    const { calls } = setup({ "GET /api/downloads": [status(false, false), status(true, false)] });
-    await screen.findByText(/Deleting is locked/);
-    await userEvent.click(screen.getByRole("button", { name: "Refresh status" }));
-    await waitFor(() => expect(rowText("One-page canvas (PDF)")).toHaveTextContent("Downloaded"));
+  it("re-reads when the page bumps the key after a download, and only reads: nothing is downloaded or sent", async () => {
+    vi.useFakeTimers();
+    const { calls, readAgain } = setup({ "GET /api/downloads": [status(false, false), status(true, false)] });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(deleteButton()).toBeDisabled();
+    readAgain(1);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(deleteButton()).toBeEnabled();
     expect(calls.map((c) => c.key).filter((k) => k !== "GET /api/csrf")).toEqual(["GET /api/downloads", "GET /api/downloads"]);
   });
 
-  it("follows each download attempt with two more reads, then stops", async () => {
+  it("follows each download attempt with three more reads, then stops", async () => {
     vi.useFakeTimers();
     const { calls } = setup({ "GET /api/downloads": status(false, false) }, 1);
     await act(() => vi.advanceTimersByTimeAsync(0));
@@ -111,19 +93,19 @@ describe("DownloadStatus: refreshing", () => {
     expect(reads(calls)).toBe(2);
     await act(() => vi.advanceTimersByTimeAsync(2500));
     expect(reads(calls)).toBe(3);
+    await act(() => vi.advanceTimersByTimeAsync(6000));
+    expect(reads(calls)).toBe(4);
     await act(() => vi.advanceTimersByTimeAsync(60_000));
-    expect(reads(calls)).toBe(3); // bounded: no polling after that
+    expect(reads(calls)).toBe(4); // bounded: no polling after that
   });
 
   it("catches a download that finished just after the first read", async () => {
     vi.useFakeTimers();
-    setup({ "GET /api/downloads": [status(false, false), status(true, false), status(true, true)] }, 1);
+    setup({ "GET /api/downloads": [status(false, false), status(true, false)] }, 1);
     await act(() => vi.advanceTimersByTimeAsync(0));
-    expect(rowText("One-page canvas (PDF)")).toHaveTextContent("Not downloaded yet");
+    expect(deleteButton()).toBeDisabled();
     await act(() => vi.advanceTimersByTimeAsync(1500));
-    expect(rowText("One-page canvas (PDF)")).toHaveTextContent("Downloaded");
-    await act(() => vi.advanceTimersByTimeAsync(2500));
-    expect(deleteButton()).toBeInTheDocument();
+    expect(deleteButton()).toBeEnabled();
   });
 
   it("starts a new set of follow-ups for the next download attempt", async () => {
@@ -152,43 +134,41 @@ describe("DownloadStatus: refreshing", () => {
     const slowEligible = () => new Promise<Response>((resolve) => (first = () => resolve(status(true, true)())));
     setup({ "GET /api/downloads": [slowEligible, status(false, false)] }, 1);
     await act(() => vi.advanceTimersByTimeAsync(1500)); // the follow-up read answers while the first is still out
-    expect(screen.getByText(/Deleting is locked/)).toBeInTheDocument();
+    expect(deleteButton()).toBeDisabled();
     await act(async () => first()); // the older, slower answer arrives last
-    expect(screen.getByText(/Deleting is locked/)).toBeInTheDocument();
-    expect(deleteButton()).not.toBeInTheDocument();
+    expect(deleteButton()).toBeDisabled();
   });
 });
 
 describe("DownloadStatus: never showing stale eligibility", () => {
-  it("hides the delete action while the status is being read again", async () => {
+  it("locks the delete action while the status is being read again", async () => {
     let release!: () => void;
-    setup({
+    const { readAgain } = setup({
       "GET /api/downloads": [status(true, true), () => new Promise<Response>((resolve) => (release = () => resolve(status(true, true)())))],
     });
-    await screen.findByRole("button", { name: /^Delete my session/ });
-    await userEvent.click(screen.getByRole("button", { name: "Refresh status" }));
-    expect(deleteButton()).not.toBeInTheDocument(); // not offered on the strength of an old answer
+    await enabledDelete();
+    readAgain(1);
+    await waitFor(() => expect(deleteButton()).toBeDisabled()); // not offered on the strength of an old answer
     release();
-    expect(await screen.findByRole("button", { name: /^Delete my session/ })).toBeInTheDocument();
+    await enabledDelete();
   });
 
-  it("drops the delete action and the confirmation if a later read fails", async () => {
-    setup({ "GET /api/downloads": [status(true, true), () => envelope("service_unavailable", 503)] });
-    await userEvent.click(await screen.findByRole("button", { name: /^Delete my session/ }));
+  it("drops the confirmation and locks the action if a later read fails", async () => {
+    const { readAgain } = setup({ "GET /api/downloads": [status(true, true), () => envelope("service_unavailable", 503)] });
+    await userEvent.click(await enabledDelete());
     expect(screen.getByRole("button", { name: "Yes, delete everything" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Refresh status" }));
+    readAgain(1);
     expect(await screen.findByRole("alert")).toHaveTextContent("We could not check the download status");
-    expect(deleteButton()).not.toBeInTheDocument();
+    expect(deleteButton()).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Yes, delete everything" })).not.toBeInTheDocument();
-    expect(rowText("One-page canvas (PDF)")).toHaveTextContent("Could not be checked");
   });
 
-  it("starts with a failed read as a locked, retryable state", async () => {
+  it("starts with a failed read as a locked state that can be checked again", async () => {
     setup({ "GET /api/downloads": [() => envelope("service_unavailable", 503), status(true, false)] });
     expect(await screen.findByRole("alert")).toHaveTextContent("Deleting stays locked until it has been checked");
-    expect(deleteButton()).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Refresh status" }));
-    await screen.findByText("Still to download: the appendix (PDF).");
+    expect(deleteButton()).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await enabledDelete();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -199,22 +179,20 @@ describe("DownloadStatus: never showing stale eligibility", () => {
       },
     });
     expect(await screen.findByRole("alert")).toHaveTextContent("We could not check the download status");
-    expect(deleteButton()).not.toBeInTheDocument();
+    expect(deleteButton()).toBeDisabled();
   });
 
-  it("resets when the next read says the documents are no longer downloaded (an amendment)", async () => {
-    setup({ "GET /api/downloads": [status(true, true), status(false, false)] });
-    await screen.findByRole("button", { name: /^Delete my session/ });
-    await userEvent.click(screen.getByRole("button", { name: "Refresh status" }));
-    await screen.findByText(/Deleting is locked/);
-    expect(deleteButton()).not.toBeInTheDocument();
-    expect(rowText("Appendix (PDF)")).toHaveTextContent("Not downloaded yet");
+  it("resets when the next read says the canvas is no longer downloaded (an amendment)", async () => {
+    const { readAgain } = setup({ "GET /api/downloads": [status(true, true), status(false, false)] });
+    await enabledDelete();
+    readAgain(1);
+    await waitFor(() => expect(deleteButton()).toBeDisabled());
   });
 
   it("hands over to the page when the status is for a different revision, and shows no eligibility", async () => {
     const { onOutOfDate } = setup({ "GET /api/downloads": status(true, true, { revision: 4 }) });
     await waitFor(() => expect(onOutOfDate).toHaveBeenCalledTimes(1));
-    expect(deleteButton()).not.toBeInTheDocument();
+    expect(deleteButton()).toBeDisabled();
   });
 
   it("returns to entry when the session has ended, and does not keep reading", async () => {
@@ -222,10 +200,10 @@ describe("DownloadStatus: never showing stale eligibility", () => {
     const { onAccessLost, calls } = setup({ "GET /api/downloads": () => envelope("unauthenticated", 401) }, 1);
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(onAccessLost).toHaveBeenCalled();
-    expect(deleteButton()).not.toBeInTheDocument();
+    expect(deleteButton()).toBeDisabled();
     const before = reads(calls);
     await act(() => vi.advanceTimersByTimeAsync(10_000));
-    expect(reads(calls)).toBeLessThanOrEqual(before + 2); // only the bounded follow-ups, each ends the same way
+    expect(reads(calls)).toBeLessThanOrEqual(before + 3); // only the bounded follow-ups, each ends the same way
     expect(onAccessLost.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 });
@@ -237,7 +215,7 @@ describe("DownloadStatus: deleting", () => {
 
   it("asks for confirmation first and sends nothing until the user says yes", async () => {
     const { calls } = setup({ ...eligible, "POST /api/session/purge": () => new Response(null, { status: 204 }) });
-    await userEvent.click(await screen.findByRole("button", { name: /^Delete my session/ }));
+    await userEvent.click(await enabledDelete());
     expect(screen.getByText(/cannot be recovered/)).toBeInTheDocument();
     expect(sentPurges(calls)).toHaveLength(0);
     await userEvent.click(screen.getByRole("button", { name: "Keep my session" }));
@@ -245,9 +223,22 @@ describe("DownloadStatus: deleting", () => {
     expect(sentPurges(calls)).toHaveLength(0);
   });
 
+  it("asks in a window over the page, focused on the safe choice, and Escape closes it without sending", async () => {
+    const { calls } = setup({ ...eligible, "POST /api/session/purge": () => new Response(null, { status: 204 }) });
+    const opener = await enabledDelete();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument(); // nothing is shown in the page itself
+    await userEvent.click(opener);
+    const dialog = screen.getByRole("dialog", { name: "Delete this session now?" });
+    expect(dialog).toHaveAccessibleDescription(/cannot be recovered/);
+    expect(within(dialog).getByRole("button", { name: "Keep my session" })).toHaveFocus();
+    fireEvent(dialog, new Event("cancel", { cancelable: true })); // what the browser sends for Escape
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(sentPurges(calls)).toHaveLength(0);
+  });
+
   it("sends only the revision shown, then leaves the page", async () => {
     const { calls, onPurged } = setup({ ...eligible, "POST /api/session/purge": () => new Response(null, { status: 204 }) });
-    await userEvent.click(await screen.findByRole("button", { name: /^Delete my session/ }));
+    await userEvent.click(await enabledDelete());
     await userEvent.click(screen.getByRole("button", { name: "Yes, delete everything" }));
     await waitFor(() => expect(onPurged).toHaveBeenCalledTimes(1));
     expect(sentPurges(calls)).toEqual([{ revision: 3 }]); // no eligibility or download flags from the browser
@@ -259,7 +250,7 @@ describe("DownloadStatus: deleting", () => {
       ...eligible,
       "POST /api/session/purge": () => new Promise<Response>((resolve) => (release = () => resolve(new Response(null, { status: 204 })))),
     });
-    await userEvent.click(await screen.findByRole("button", { name: /^Delete my session/ }));
+    await userEvent.click(await enabledDelete());
     await userEvent.click(screen.getByRole("button", { name: "Yes, delete everything" }));
     expect(screen.getByRole("button", { name: "Deleting…" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Keep my session" })).toBeDisabled();
@@ -269,21 +260,20 @@ describe("DownloadStatus: deleting", () => {
 
   it("when the server refuses (it is still locked), says so, changes nothing and reads the status again", async () => {
     const { onPurged, calls } = setup({
-      "GET /api/downloads": [status(true, true), status(true, false)],
+      "GET /api/downloads": [status(true, true), status(false, false)],
       "POST /api/session/purge": () => envelope("purge_locked", 409),
     });
-    await userEvent.click(await screen.findByRole("button", { name: /^Delete my session/ }));
+    await userEvent.click(await enabledDelete());
     await userEvent.click(screen.getByRole("button", { name: "Yes, delete everything" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Deleting is still locked. Please download both PDFs first.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Deleting is still locked. Please download the one-page canvas or submit it by email first.");
     expect(onPurged).not.toHaveBeenCalled();
-    await screen.findByText("Still to download: the appendix (PDF).");
-    expect(deleteButton()).not.toBeInTheDocument();
+    await waitFor(() => expect(deleteButton()).toBeDisabled());
     expect(reads(calls)).toBe(2);
   });
 
   it("when the canvas changed under it, says so and hands over to the page", async () => {
     const { onOutOfDate, onPurged } = setup({ ...eligible, "POST /api/session/purge": () => envelope("revision_conflict", 409) });
-    await userEvent.click(await screen.findByRole("button", { name: /^Delete my session/ }));
+    await userEvent.click(await enabledDelete());
     await userEvent.click(screen.getByRole("button", { name: "Yes, delete everything" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The canvas changed since it was shown");
     expect(onOutOfDate).toHaveBeenCalled();
@@ -292,7 +282,7 @@ describe("DownloadStatus: deleting", () => {
 
   it("returns to entry when the session ended during the deletion", async () => {
     const { onAccessLost, onPurged } = setup({ ...eligible, "POST /api/session/purge": () => envelope("unauthenticated", 401) });
-    await userEvent.click(await screen.findByRole("button", { name: /^Delete my session/ }));
+    await userEvent.click(await enabledDelete());
     await userEvent.click(screen.getByRole("button", { name: "Yes, delete everything" }));
     await waitFor(() => expect(onAccessLost).toHaveBeenCalled());
     expect(onPurged).not.toHaveBeenCalled();
@@ -300,7 +290,7 @@ describe("DownloadStatus: deleting", () => {
 
   it("gives fixed guidance for any other failure and never shows server text", async () => {
     setup({ ...eligible, "POST /api/session/purge": () => envelope("something_new", 500) });
-    await userEvent.click(await screen.findByRole("button", { name: /^Delete my session/ }));
+    await userEvent.click(await enabledDelete());
     await userEvent.click(screen.getByRole("button", { name: "Yes, delete everything" }));
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("That could not be done. Please try again.");

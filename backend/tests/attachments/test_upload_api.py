@@ -163,12 +163,15 @@ def process(extraction, text, state=None):
 
 def test_a_priority_in_an_attached_file_is_never_taken_as_the_users_choice():
     attached = block(
-        "plan.docx", "docx", "Priority: High. This is a High priority idea.", truncated=False
+        "plan.docx",
+        "docx",
+        "Priority: Must-have. This is a Must-have priority idea.",
+        truncated=False,
     )
-    outcome = process(Extraction([update("priority", "High")]), attached)
+    outcome = process(Extraction([update("priority", "Must-have")]), attached)
     assert "priority" not in outcome.state.canvas  # only the user's own typing can choose it
-    typed = process(Extraction([update("priority", "High")]), "High\n\n" + attached)
-    assert typed.state.canvas["priority"] == "High"
+    typed = process(Extraction([update("priority", "Must-have")]), "Must-have\n\n" + attached)
+    assert typed.state.canvas["priority"] == "Must-have"
 
 
 def test_not_knowing_is_read_from_what_was_typed_not_from_a_file():
@@ -192,3 +195,33 @@ def test_an_instruction_hidden_in_a_file_gets_the_same_treatment_as_typed_text()
         Extraction(), "Our idea is a shift notes tool.\n\n" + attached, InterviewState()
     )
     assert outcome.text.startswith("I can only help with completing the canvas.")
+
+
+# --- carrying on from a draft saved halfway -----------------------------------------------------------
+
+
+def test_a_draft_saved_halfway_can_be_attached_in_a_new_session_to_carry_on(world):
+    """Save the unfinished canvas and appendix, then read each back as an attachment in a new session:
+    the answers so far, and the 'UNFINISHED DRAFT' mark, come back as text the assistant can use."""
+    from tests.appendix.test_appendix_api import appendix
+    from tests.appendix.test_canvas_pptx import canvas_file
+    from tests.interview.test_interview_api import say
+
+    wire(world)
+    first = browser(world)
+    say(first, OPENING)
+    assert history(first)["canvas"]["ready_for_review"] is False
+    canvas_pdf = canvas_file(first, "pdf")
+    appendix_pdf = appendix(first, "pdf")
+    assert canvas_pdf.status_code == 200 and appendix_pdf.status_code == 200
+    assert "-canvas-draft-r" in canvas_pdf.headers["content-disposition"]
+
+    second = browser(world)  # a brand new session, as after stopping
+    assert history(second)["turns"] == []
+    read_canvas = upload(second, "idea-canvas-draft-r2.pdf", canvas_pdf.content)
+    assert read_canvas.status_code == 200 and read_canvas.json()["kind"] == "pdf"
+    assert "AI OPPORTUNITY CANVAS" in read_canvas.json()["block"]
+    read_appendix = upload(second, "idea-appendix-draft-r2.pdf", appendix_pdf.content)
+    assert read_appendix.status_code == 200
+    text = read_appendix.json()["block"]
+    assert "UNFINISHED DRAFT" in text and "three spreadsheets" in text  # the answer so far survives

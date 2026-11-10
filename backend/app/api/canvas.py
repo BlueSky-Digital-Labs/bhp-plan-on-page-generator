@@ -7,13 +7,13 @@ from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.access.store import Session
-from app.api.access import current_session, require_csrf
+from app.api.access import active_session, require_csrf
 from app.api.conversation import get_conversation
 from app.api.exports import (
     attachment,
-    confirmed_snapshot,
     delivery_recorder,
-    ensure_still_confirmed,
+    downloadable_snapshot,
+    ensure_still_current,
     problem,
 )
 from app.appendix.model import AppendixError
@@ -54,7 +54,7 @@ class ConfirmBody(BaseModel):
 @router.post("/canvas/confirm", dependencies=[Depends(require_csrf)])
 def confirm_canvas(
     body: ConfirmBody,
-    session: Annotated[Session, Depends(current_session)],
+    session: Annotated[Session, Depends(active_session)],
     service: Annotated[ConversationService, Depends(get_conversation)],
 ) -> dict:
     """The user confirms the revision they read back. Returns the refreshed review."""
@@ -68,20 +68,20 @@ def confirm_canvas(
 
 @router.get("/canvas-file")
 def download_canvas(
-    session: Annotated[Session, Depends(current_session)],
+    session: Annotated[Session, Depends(active_session)],
     service: Annotated[ConversationService, Depends(get_conversation)],
     file_format: Annotated[Literal["pdf", "pptx"], Query(alias="format")],
     revision: Annotated[int, Query(ge=0)],
 ) -> Response:
     """The confirmed canvas. Built per request, in memory, and never kept."""
-    snapshot = confirmed_snapshot(service, session, revision)
+    snapshot = downloadable_snapshot(service, session, revision)
     render, media_type = _FILES[file_format]
     try:
         content = render(snapshot.canvas)
     except Exception as exc:  # noqa: BLE001 - never leak renderer detail or user text
         logger.error("canvas_render_failed", extra={"exception_type": type(exc).__name__})
         raise problem(AppendixError("render_failed")) from None
-    ensure_still_confirmed(service, session, revision)
+    ensure_still_current(service, session, revision)
     logger.info("canvas_downloaded", extra={"reason": file_format})
-    recorder = delivery_recorder(service, session, "canvas", snapshot, file_format)
+    recorder = delivery_recorder(service, session, "canvas", snapshot)
     return attachment(content, media_type, snapshot, "canvas", file_format, recorder)

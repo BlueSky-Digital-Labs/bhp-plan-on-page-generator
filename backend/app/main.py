@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -13,18 +14,28 @@ from app.api import api_router
 from app.api.access import dependency_unavailable
 from app.appendix.summarizer import BedrockSummarizer
 from app.config import Settings, get_settings
+from app.conversation.dynamo_store import DynamoConversationStore
 from app.conversation.producers import ScriptedTestProducer, UnavailableProducer
 from app.conversation.service import ConversationService
-from app.conversation.store import InMemoryConversationStore, UnavailableConversationStore
-from app.delivery import InMemoryDeliveryStore, UnavailableDeliveryStore
+from app.conversation.store import InMemoryConversationStore
+from app.delivery import InMemoryDeliveryStore
+from app.delivery.dynamo_store import DynamoDeliveryStore
+from app.dynamo import build_client as build_dynamo_client
 from app.errors import register_exception_handlers
+from app.interview.dynamo_store import DynamoInterviewStore
 from app.interview.engine import Interviewer
 from app.interview.extractors import BedrockExtractor
 from app.interview.producer import InterviewerProducer
-from app.interview.store import InMemoryInterviewStore
+from app.interview.store import InMemoryInterviewStore, InterviewStoreBase
 from app.logging_config import configure_logging
 from app.mailer import SesMailer, UnavailableMailer, build_ses_client
 from app.mailer.service import MailService
+from app.mailer.settings import (
+    NoSubmitSettings,
+    ParameterStoreSubmitSettings,
+    StaticSubmitSettings,
+    build_ssm_client,
+)
 from app.middleware import RequestContextMiddleware
 
 
@@ -47,11 +58,26 @@ class SpaStaticFiles(StaticFiles):
             raise
 
 
+def _build_stores(settings: Settings) -> tuple[Any, Any, InterviewStoreBase]:
+    """(conversation store, delivery store, interview store).
+
+    Deployed: all three live in the one DynamoDB table, so any task can serve any request and a
+    delete, purge or expiry removes everything. Otherwise they are in this process's memory
+    (local use and tests only).
+    """
+    if settings.is_deployed:
+        client = build_dynamo_client(settings.aws_region)
+        table = settings.sessions_table_name or ""  # required by Settings when deployed
+        return (
+            DynamoConversationStore(client, table),
+            DynamoDeliveryStore(client, table),
+            DynamoInterviewStore(client, table),
+        )
+    return InMemoryConversationStore(), InMemoryDeliveryStore(), InMemoryInterviewStore()
+
+
 def build_conversation(settings: Settings) -> ConversationService:
-    # Deployed: no durable turn store exists yet, so fail closed (503) instead of keeping
-    # transcripts in per-process memory behind a load balancer.
-    store = UnavailableConversationStore() if settings.is_deployed else InMemoryConversationStore()
-    deliveries = UnavailableDeliveryStore() if settings.is_deployed else InMemoryDeliveryStore()
+    store, deliveries, interview_store = _build_stores(settings)
     choice = settings.conversation_producer
     if choice == "interviewer_bedrock":
         # Fails at startup (ConfigError) unless an approved Bedrock selection is configured.
@@ -60,7 +86,6 @@ def build_conversation(settings: Settings) -> ConversationService:
         extractor = BedrockExtractor(
             adapter, force_tool=validated.supports(Capability.FORCED_TOOL_CHOICE)
         )
-        interview_store = InMemoryInterviewStore()
         producer = InterviewerProducer(Interviewer(extractor), interview_store)
         return ConversationService(
             store,
@@ -72,7 +97,14 @@ def build_conversation(settings: Settings) -> ConversationService:
     producer = (
         ScriptedTestProducer(delay_seconds=0.05) if choice == "test" else UnavailableProducer()
     )
-    return ConversationService(store, producer, deliveries=deliveries)
+    # Deployed, the interview store is always attached so a delete or the scheduled sweep (which
+    # builds this without a producer) also removes the canvas drafts.
+    return ConversationService(
+        store,
+        producer,
+        deliveries=deliveries,
+        interview=interview_store if settings.is_deployed else None,
+    )
 
 
 class DiscardingMailer:
@@ -84,16 +116,35 @@ class DiscardingMailer:
         return None
 
 
+def _submit_source(settings: Settings, domains: tuple[str, ...]):
+    """Where the recipient and text come from: Parameter Store in AWS, fixed values otherwise."""
+    if settings.email_recipient_parameter:
+        return ParameterStoreSubmitSettings(
+            build_ssm_client(settings.aws_region),
+            settings.email_recipient_parameter,
+            settings.email_body_parameter,
+            domains,
+        )
+    recipient = settings.email_recipient
+    if not recipient and settings.email_delivery == "test":
+        recipient = "submissions@example.com"  # presentation tests only: the mailer drops it
+    if recipient:
+        return StaticSubmitSettings(recipient, settings.email_body or "", domains)
+    return NoSubmitSettings()
+
+
 def _build_mail(settings: Settings) -> MailService:
-    # Fails at startup (ConfigError, from Settings) when `ses` lacks a sender or allowed domains.
+    # Fails at startup (ConfigError, from Settings) when `ses` lacks a sender, allowed domains or
+    # a recipient. A fixed recipient outside the allowed domains fails here too.
     domains = settings.allowed_email_domains
     if settings.email_delivery == "ses":
         client = build_ses_client(settings.ses_region or settings.aws_region)
         sender = settings.email_sender_address or ""
-        return MailService(SesMailer(client, sender, settings.email_configuration_set), domains)
+        mailer = SesMailer(client, sender, settings.email_configuration_set)
+        return MailService(mailer, _submit_source(settings, domains))
     if settings.email_delivery == "test":
-        return MailService(DiscardingMailer(), domains)
-    return MailService(UnavailableMailer(), domains)
+        return MailService(DiscardingMailer(), _submit_source(settings, domains))
+    return MailService(UnavailableMailer(), NoSubmitSettings())
 
 
 def create_app(
@@ -111,7 +162,7 @@ def create_app(
     configure_logging(settings.log_level)
 
     app = FastAPI(
-        title="Plan on a Page",
+        title="SCP AI Ideation assistant",
         # Interactive docs and the schema are for local work only.
         docs_url=None if settings.is_deployed else "/api/docs",
         redoc_url=None,

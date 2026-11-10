@@ -1,7 +1,12 @@
 import boto3
 from botocore.config import Config
 
-from app.access.secrets import EnvSecretProvider, SecretProvider, SecretsManagerProvider
+from app.access.secrets import (
+    EnvSecretProvider,
+    ParameterStoreProvider,
+    SecretProvider,
+    SecretsManagerProvider,
+)
 from app.access.service import AccessService
 from app.access.store import DynamoSessionStore, InMemorySessionStore, SessionStore
 from app.config import Settings
@@ -17,7 +22,7 @@ def build_access_service(
     secret_provider: SecretProvider | None = None,
     store: SessionStore | None = None,
 ) -> AccessService:
-    """Production wiring: Secrets Manager + DynamoDB through the workload role.
+    """Production wiring: Secrets Manager (or Parameter Store) + DynamoDB through the workload role.
 
     Without the identifiers (local/test only; deployed requires them) it falls back to
     environment secrets and an in-memory store.
@@ -26,10 +31,14 @@ def build_access_service(
         hash_id = settings.access_code_hash_secret_id
         key_id = settings.cookie_signing_key_secret_id
         if hash_id and key_id:
-            client = boto3.client(
-                "secretsmanager", region_name=settings.aws_region, config=_CLIENT_CONFIG
-            )
-            secret_provider = SecretsManagerProvider(client, hash_id, key_id)
+            if settings.secrets_backend == "parameterstore":
+                client = boto3.client("ssm", region_name=settings.aws_region, config=_CLIENT_CONFIG)
+                secret_provider = ParameterStoreProvider(client, hash_id, key_id)
+            else:
+                client = boto3.client(
+                    "secretsmanager", region_name=settings.aws_region, config=_CLIENT_CONFIG
+                )
+                secret_provider = SecretsManagerProvider(client, hash_id, key_id)
         else:
             secret_provider = EnvSecretProvider()
     if store is None:

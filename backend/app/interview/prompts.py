@@ -7,7 +7,7 @@ Bump PROMPT_VERSION whenever any wording below changes and re-run the question t
 import re
 from typing import Any
 
-PROMPT_VERSION = "2026-11-04.4"
+PROMPT_VERSION = "2026-11-09.1"
 
 SYSTEM_PROMPT = """\
 You help a colleague fill in an AI opportunity canvas by turning what they say into canvas fields.
@@ -25,7 +25,11 @@ Rules:
 - For opportunityTypes you may map what the user says they want AI to do onto the allowed names
   when it clearly matches (for example "write the handover report" is Generate Reports). If it
   does not clearly match, record nothing.
-- Never set priority unless the user explicitly chose Low, Medium, High or Strategic.
+- When the question target is "none" the canvas is already complete and the user is correcting or
+  adding to it: record each field they say should change, using the new wording they gave.
+- When the question target is "revise: <field>", the user is giving the new answer for that one
+  field: record only that field, in their new wording.
+- Never set priority unless the user explicitly chose Must-have, Nice-to-have or Exploratory.
 - If the user is unsure or declines, record nothing for that field.
 - If a message says something that contradicts an earlier answer, record the new statement; the
   server will ask the user which one to keep.
@@ -52,11 +56,45 @@ ACK: dict[str, tuple[str, ...]] = {
         "I'm not sure I followed that.",
     ),
     "override": ("I can only help with completing the canvas.",),
-    "conflict": ("That's different from what you said earlier.",),
-    "unclear": ("Sorry, I couldn't tell which one you meant.",),
-    "kept_earlier": ("I still couldn't tell which you meant, so I've kept what you said first.",),
+    "conflict": ("Just checking.", "One quick check."),
+    "unclear": ("Sorry, I couldn't tell whether you want to change it. Yes or no is fine.",),
+    "kept_earlier": ("I still couldn't tell, so I've kept your earlier answer.",),
 }
 READY_TEXT = "That's everything I need. Have a look at the canvas whenever you're ready."
+# After "that's everything", when the user comes back to change something. A change that differs
+# from an earlier answer is asked about first (the contradiction question), so these are the rest.
+AMEND_REPLIES: dict[str, str] = {
+    "captured": "Thanks, I've added that. Have a look at the canvas whenever you're ready.",
+    "unsure": "No problem, I've left the canvas as it is. Have a look whenever you're ready.",
+    "declined": "No problem, I've left the canvas as it is. Have a look whenever you're ready.",
+    "override": "I can only help with completing the canvas. Have a look whenever you're ready.",
+}
+
+
+# Changing an answer: which part, then the new answer. One question each.
+AMEND_PICK = "Which part would you like to change? Pick one below, or tell me in your own words."
+AMEND_PICK_AGAIN = (
+    "Sorry, I couldn't tell which part you meant. Pick one below, or say “never mind” to leave "
+    "the canvas as it is."
+)
+AMEND_LEFT = "No problem, I've left the canvas as it is. Have a look whenever you're ready."
+AMEND_GAVE_UP = (
+    "I still couldn't tell, so I've left the canvas as it is. Have a look whenever you're ready."
+)
+
+
+def amend_revise(name: str, current: str, *, choices: bool, multiple: bool, again: bool) -> str:
+    """Asks for the new answer to one part. `current` is the user's own words, shortened."""
+    lead = "Sorry, I couldn't use that. " if again else "Okay. "
+    if choices:
+        which = "Which ones" if multiple else "Which one"
+        more = " You can pick more than one." if multiple else ""
+        return f"{lead}Right now {name} is {current}. {which} would you like instead?{more}"
+    return f"{lead}Right now {name} says “{current}”. What should it say instead?"
+
+
+def amend_done(name: str) -> str:
+    return f"Done, I've updated {name}. Have a look at the canvas whenever you're ready."
 
 
 def acknowledgement(cue: str, turn_number: int) -> str:
@@ -73,26 +111,27 @@ QUESTIONS: dict[str, tuple[str, str]] = {
         "A short name like “Shift Notes Assistant” works. What would you call it?",
     ),
     "team": (
-        "Which team or department is this for?",
+        "Which team or department would own or use this idea?",
         "I just need the team name, something like “Operations”. Which team is this for?",
     ),
     "currentProcess": (
-        "Could you walk me through how this work gets done today?",
+        "Could you walk me through how this work gets done today, from the first step to the last?",
         "Think of the steps from start to finish, like “copy the notes into a spreadsheet, then "
         "email a summary”. How is it done today?",
     ),
     "painPoints": (
-        "What makes the way it works today painful or frustrating?",
+        "Which part of the way it works today causes the most problems, such as delays, mistakes "
+        "or rework?",
         "Tell me the biggest headache, like “it takes two hours and details get lost”. "
         "What problem hurts most?",
     ),
     "futureState": (
-        "If this worked really well, what would a normal day look like?",
+        "If this worked well, how would the day-to-day work look different, step by step?",
         "Picture a good day once it works, like “notes are captured once and everyone sees the "
         "same summary”. What would be different?",
     ),
     "achieve": (
-        "What do you want AI to achieve here?",
+        "What is the one outcome you most want AI to achieve here?",
         "In one sentence, like “make shift handover faster and safer”. "
         "What outcome do you want from AI?",
     ),
@@ -104,55 +143,86 @@ QUESTIONS: dict[str, tuple[str, str]] = {
         "Analyse Data or Automate Workflows?",
     ),
     "success": (
-        "How will you know it's working well?",
+        "What is one change you would notice that tells you this is working?",
         "Think of one change you'd notice, like “handover takes minutes and nothing is missed”. "
         "What would success look like?",
     ),
     "users": (
-        "Who would use this day to day?",
+        "Which roles or groups would use this every day?",
         "Roles or groups are fine, like “shift supervisors and area managers”. Who would use it?",
     ),
     "decision": (
-        "What decision would this help people make better?",
+        "What specific decision would this help people make faster or with more confidence?",
         "Think of one choice people make in this work, like “escalating issues at handover”. "
         "What decision should it improve?",
     ),
     "data": (
-        "What data or information would it need to work with?",
+        "What data or documents would it need to read, such as logs, reports or records?",
         "Name the records or documents involved, like “shift logs and incident reports”. "
         "What data would it need?",
     ),
     "systems": (
-        "Which existing systems or tools would it need to connect to?",
+        "Which existing systems or tools would it need to connect to, such as rostering or "
+        "maintenance systems?",
         "Name the tools people use today, like “the rostering system”. "
         "Which systems would it connect to?",
     ),
     "risks": (
-        "What could get in the way of this working, such as risks or dependencies?",
+        "What risks or dependencies could stop this from working, such as approvals, sensitive "
+        "information or other groups?",
         "Name the one thing most likely to cause trouble, like “notes may contain sensitive "
         "details”. What risk worries you most?",
     ),
     "priority": (
-        "What priority would you give this idea: Low, Medium, High or Strategic?",
-        "It's your call. Which priority fits: Low, Medium, High or Strategic?",
+        "What priority would you give this idea: Must-have, Nice-to-have or Exploratory?",
+        "It's your call. Which priority fits: Must-have, Nice-to-have or Exploratory?",
     ),
     "businessImpact": (
-        "What difference would this make for the business, if you can say?",
+        "What difference would this make for the business, in time saved, cost, safety or quality?",
         "It's fine to say you don't know. Roughly, what would improve for the business?",
     ),
     "kpis": (
-        "How would you measure success, if you have a number in mind?",
+        "How would you measure success, for example hours saved or fewer errors per month?",
         "It's fine to say you don't know. What number or measure would show it is working?",
     ),
 }
 
-# A short hint after a first ask, where one helps. Not part of the question itself.
+# A short hint after a first ask: how to answer it well, with a small synthetic example. Not part
+# of the question itself, so it can be as specific as it needs to be.
 TIPS = {
     "probe": "A sentence or two is plenty.",
-    "solutionName": "A rough working title is fine.",
-    "opportunityTypes": "You can pick more than one.",
-    "priority": "It's your choice, so no need to overthink it.",
-    "businessImpact": "Skip it if you're not sure.",
+    "solutionName": "A short, recognisable name works best, and a rough working title is fine.",
+    "team": "Just the team name, like “Operations” or “Maintenance Planning”.",
+    "currentProcess": (
+        "Say who does each step and what they use, like “a supervisor copies the notes into a "
+        "spreadsheet, then emails the next shift”."
+    ),
+    "painPoints": "Numbers help, like “two hours every shift” or “three errors a week”.",
+    "futureState": (
+        "Describe a normal shift or day, like “notes are captured once and everyone sees the "
+        "same summary”."
+    ),
+    "achieve": "One sentence is enough, like “make shift handover faster and safer”.",
+    "opportunityTypes": (
+        "You can pick more than one. For example, “write the handover report” fits "
+        "Generate Reports."
+    ),
+    "success": (
+        "Something you could see or count, like “handover takes minutes and nothing is missed”."
+    ),
+    "users": "Roles are fine, like “shift supervisors and area managers”.",
+    "decision": (
+        "Think of a choice that is slow or uncertain today, like “which issues to escalate at "
+        "handover”."
+    ),
+    "data": "Name the actual records, like “shift logs and incident reports”.",
+    "systems": "Name the tools people use today, like “the rostering system”.",
+    "risks": "Pick the one that worries you most, like “notes may contain sensitive details”.",
+    "priority": (
+        "Must-have means the work really needs it, Nice-to-have means it helps but can wait, and "
+        "Exploratory means it is worth testing first."
+    ),
+    "businessImpact": "Rough numbers are fine, or skip it if you're not sure.",
     "kpis": "Skip it if you're not sure.",
 }
 
@@ -162,8 +232,15 @@ CONFIRM = {
     "systems": "I have “{v}” down as the systems so far. Does it need to connect to any others?",
 }
 # One follow-up on the priority the user chose, so the reason is on the page too.
-PROBE = "Why does this deserve {v} priority?"
-CONFLICT = "Earlier you said “{old}”, but now I heard “{new}”. Which one should I use?"
+PROBE = "Why did you give this idea the priority “{v}”?"
+CONFLICT = "You said “{old}” earlier. Do you want to update it to “{new}”?"
+# For a part with a fixed list of answers (priority, opportunity type) the list is shown again.
+CONFLICT_PICK = (
+    "You chose “{old}” earlier. Do you want to change it to “{new}”? "
+    "Or pick the one you want below."
+)
+# The two ways to answer it, offered as a selection and read back by the engine as yes / no.
+CONFLICT_CHOICES = ("Yes, update it", "No, keep my earlier answer")
 
 
 def _quote(value: Any) -> str:
@@ -180,7 +257,8 @@ def render_question(
     if kind == "probe":
         return PROBE.format(v=_quote(canvas.get(field, "")))
     if kind == "clarify" and conflict_new is not None:
-        return CONFLICT.format(old=_quote(canvas.get(field, "")), new=_quote(conflict_new))
+        template = CONFLICT_PICK if field in ("priority", "opportunityTypes") else CONFLICT
+        return template.format(old=_quote(canvas.get(field, "")), new=_quote(conflict_new))
     ask, clarify = QUESTIONS[field]
     return clarify if attempts > 0 else ask
 

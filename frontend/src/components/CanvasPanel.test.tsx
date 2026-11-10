@@ -1,6 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { CanvasView } from "../api/conversation";
 import { missingRequired, emptyCanvas } from "../canvas/fields";
 import { CanvasPanel } from "./CanvasPanel";
@@ -13,12 +12,12 @@ const view = (over: Partial<CanvasView> = {}): CanvasView => ({
 });
 
 const row = (id: string) => within(screen.getByTestId(`canvas-${id}`));
+const labels = () => screen.getAllByRole("listitem").map((li) => li.querySelector(".canvas-panel__label")?.textContent);
 
 describe("CanvasPanel", () => {
   it("lists every canvas field in template order, unanswered by default", () => {
     render(<CanvasPanel canvas={view({ missing_required: Array(14).fill("x") })} />);
-    const labels = screen.getAllByRole("term").map((t) => t.textContent);
-    expect(labels).toEqual([
+    expect(labels()).toEqual([
       "Solution Name",
       "Team",
       "Priority",
@@ -37,6 +36,7 @@ describe("CanvasPanel", () => {
       "Key risks and dependencies?",
     ]);
     expect(screen.getAllByText("Not answered yet")).toHaveLength(16);
+    expect(screen.queryByText("Answered")).not.toBeInTheDocument();
     expect(screen.getByTestId("canvas-progress")).toHaveTextContent("14 required answers still to go.");
   });
 
@@ -45,18 +45,22 @@ describe("CanvasPanel", () => {
     expect(missingRequired(emptyCanvas())).toHaveLength(14);
   });
 
-  it("shows the saved values, including more than one opportunity type", () => {
+  it("ticks a field once it has an answer, and never shows the answer itself", () => {
     render(
       <CanvasPanel
         canvas={view({
-          fields: { solutionName: "Shift Notes Assistant", opportunityTypes: ["Find Information", "Generate Reports"], priority: "High" },
+          fields: { solutionName: "Shift Notes Assistant", opportunityTypes: ["Find Information", "Generate Reports"], priority: "Must-have" },
           missing_required: Array(11).fill("x"),
         })}
       />,
     );
-    expect(row("solutionName").getByText("Shift Notes Assistant")).toBeInTheDocument();
-    expect(row("opportunityTypes").getByText("Find Information, Generate Reports")).toBeInTheDocument();
-    expect(row("priority").getByText("High")).toBeInTheDocument();
+    for (const id of ["solutionName", "opportunityTypes", "priority"]) {
+      expect(row(id).getByText("Answered")).toBeInTheDocument();
+      expect(screen.getByTestId(`canvas-${id}`)).toHaveTextContent("✓");
+    }
+    expect(row("team").getByText("Not answered yet")).toBeInTheDocument();
+    expect(screen.getAllByText("Answered")).toHaveLength(3);
+    expect(screen.queryByText(/Shift Notes Assistant|Must-have|Find Information/)).not.toBeInTheDocument();
     expect(screen.getByTestId("canvas-progress")).toHaveTextContent("11 required answers still to go.");
   });
 
@@ -67,30 +71,16 @@ describe("CanvasPanel", () => {
     expect(screen.getByTestId("canvas-progress")).toHaveTextContent("Ready for review");
   });
 
-  it("renders saved values as inert text, never as markup", () => {
+  it("does not render what was saved, so markup in an answer can never reach the page", () => {
     const hostile = '<img src=x onerror="alert(1)"> <script>alert(2)</script>';
     const { container } = render(<CanvasPanel canvas={view({ fields: { painPoints: hostile } })} />);
-    expect(row("painPoints").getByText(hostile)).toBeInTheDocument();
+    expect(row("painPoints").getByText("Answered")).toBeInTheDocument();
+    expect(container.textContent).not.toContain("alert(");
     expect(container.querySelector("img, script")).toBeNull();
   });
 
   it("tolerates a missing canvas (no interviewer attached)", () => {
     render(<CanvasPanel />);
     expect(screen.getAllByText("Not answered yet")).toHaveLength(16);
-  });
-
-  it("offers 'Generate canvas' only when the server says the canvas is ready", async () => {
-    const onGenerate = vi.fn();
-    const { rerender } = render(<CanvasPanel canvas={view({ missing_required: ["team"] })} onGenerate={onGenerate} />);
-    expect(screen.queryByRole("button", { name: "Generate canvas" })).not.toBeInTheDocument();
-
-    rerender(<CanvasPanel canvas={view({ ready_for_review: true })} onGenerate={onGenerate} />);
-    await userEvent.click(screen.getByRole("button", { name: "Generate canvas" }));
-    expect(onGenerate).toHaveBeenCalledTimes(1);
-  });
-
-  it("never shows the button without a handler, however the data looks", () => {
-    render(<CanvasPanel canvas={view({ ready_for_review: true })} />);
-    expect(screen.queryByRole("button", { name: "Generate canvas" })).not.toBeInTheDocument();
   });
 });

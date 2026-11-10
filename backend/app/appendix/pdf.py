@@ -3,6 +3,7 @@ from pathlib import Path
 from fpdf import FPDF
 
 from app.appendix.model import (
+    DRAFT_NOTE,
     INTRO,
     OVERVIEW_LABEL,
     OVERVIEW_NOTE,
@@ -22,14 +23,14 @@ _BODY, _LINE = 10.5, 5.6  # readable text size and line height (mm)
 
 
 class _Document(FPDF):
-    def __init__(self, revision: int) -> None:
+    def __init__(self, revision: int, app_name: str) -> None:
         super().__init__(orientation="P", unit="mm", format="A4")
-        self.revision = revision
+        self.revision, self.app_name = revision, app_name
         self.set_margins(18, 18, 18)
         self.set_auto_page_break(auto=True, margin=20)
         self.add_font(_FAMILY, "", str(_FONTS / "DejaVuSans.ttf"))
         self.add_font(_FAMILY, "B", str(_FONTS / "DejaVuSans-Bold.ttf"))
-        self.set_title("Plan on a Page: Appendix")
+        self.set_title(f"{app_name}: Appendix")
         self.alias_nb_pages()
 
     def header(self) -> None:
@@ -37,7 +38,7 @@ class _Document(FPDF):
             return
         self.set_font(_FAMILY, "", 8)
         self.set_text_color(*_MUTED)
-        self.cell(0, 6, f"Plan on a Page: Appendix · revision {self.revision}", align="L")
+        self.cell(0, 6, f"{self.app_name}: Appendix · revision {self.revision}", align="L")
         self.ln(9)
 
     def footer(self) -> None:
@@ -61,9 +62,9 @@ class _Document(FPDF):
 
 
 def render_pdf(appendix: AppendixInput) -> bytes:
-    pdf = _Document(appendix.source_revision)
+    pdf = _Document(appendix.source_revision, appendix.app_name)
     pdf.add_page()
-    pdf.text_block("Plan on a Page: Appendix", size=20, bold=True)
+    pdf.text_block(f"{appendix.app_name}: Appendix", size=20, bold=True)
     pdf.text_block(INTRO, size=11, colour=_MUTED)
     pdf.text_block(
         f"Source revision {appendix.source_revision} · "
@@ -71,6 +72,8 @@ def render_pdf(appendix: AppendixInput) -> bytes:
         size=9,
         colour=_MUTED,
     )
+    if appendix.draft:
+        pdf.text_block(DRAFT_NOTE, size=9, bold=True, colour=_ACCENT)
     pdf.text_block(SNAPSHOT_NOTE, size=9, colour=_MUTED)
     pdf.ln(4)
 

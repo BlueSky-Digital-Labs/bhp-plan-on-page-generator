@@ -5,7 +5,7 @@ const allFields = [...HEADER_FIELDS, ...SECTIONS.flatMap((s) => s.fields)];
 
 function completeCanvas(): CanvasValues {
   const text = Object.fromEntries(allFields.filter((f) => f.required).map((f) => [f.id, "answer"]));
-  return { text, priority: "High", opportunityTypes: ["Analyse Data"] };
+  return { text, priority: "Must-have", opportunityTypes: ["Analyse Data"] };
 }
 
 describe("missingRequired", () => {

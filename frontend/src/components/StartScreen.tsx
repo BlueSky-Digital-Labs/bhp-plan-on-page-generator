@@ -63,12 +63,13 @@ export function StartScreen({
         <ul>
           <li>Your idea is processed temporarily, on Australian-hosted infrastructure.</li>
           <li>
-            After you have downloaded both documents, you can choose to purge your session straight
+            After you have downloaded the one-page canvas, you can choose to purge your session straight
             away.
           </li>
           <li>
-            Whether or not you do, everything is deleted automatically 24 hours after you start,
-            even if you close the browser. An abandoned session cannot be recovered.
+            Whether or not you do, everything is deleted automatically if nothing happens for 15 minutes, and in
+            any case 24 hours after you start, even if you close the browser. A session that has ended cannot be
+            recovered, so download what you need to keep.
           </li>
         </ul>
         <p className="start__note">

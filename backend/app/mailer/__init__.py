@@ -5,13 +5,15 @@ sender address. Nothing is stored. See docs/email.md.
 """
 
 from app.mailer.message import (
-    MAX_NOTE_CHARS,
+    DEFAULT_BODY,
+    MAX_BODY_CHARS,
     MAX_RECIPIENTS,
     Attachment,
     Mailer,
     MailerError,
     OutgoingEmail,
     UnavailableMailer,
+    clean_body,
     clean_recipients,
     compose,
     to_mime,
@@ -19,7 +21,8 @@ from app.mailer.message import (
 from app.mailer.ses import SesMailer, build_ses_client
 
 __all__ = [
-    "MAX_NOTE_CHARS",
+    "DEFAULT_BODY",
+    "MAX_BODY_CHARS",
     "MAX_RECIPIENTS",
     "Attachment",
     "Mailer",
@@ -28,6 +31,7 @@ __all__ = [
     "SesMailer",
     "UnavailableMailer",
     "build_ses_client",
+    "clean_body",
     "clean_recipients",
     "compose",
     "to_mime",

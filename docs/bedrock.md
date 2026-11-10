@@ -214,13 +214,24 @@ everything in the register below.
 
 | Model / profile id | Kind | Client regions | All inference destinations | Capabilities | Privacy evidence | Verified on / by | Smoke test from private task |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| _none: BLOCKED_ | | | | | | | |
+| `au.anthropic.claude-sonnet-5-5` | inference profile | ap-southeast-2 | ap-southeast-2, ap-southeast-4 (from `get-inference-profile`) | streaming (confirmed); tool use **not verified**, asserted for a functional test; no forced tool choice (the first real call with it was refused as `invalid_request`, 2026-11-06) | **NOT VERIFIED** | 2026-11-05, local tester, shared test account | not run. **TEST-ONLY, not release evidence** |
+| `openai.gpt-oss-120b-1:0` | foundation model | ap-southeast-2 | ap-southeast-2 (direct id, processed in the client region) | streaming (confirmed); tool use **not verified**; no forced tool choice | **NOT VERIFIED** | 2026-11-05, local tester, shared test account | not run. **TEST-ONLY, not release evidence** |
+
+Both rows above are **test-only entries for the shared test account**: they let the deployed app use
+those models there, and nothing more. Replace them with fully verified entries (steps 1-9) before any release.
 
 Evidence is stored in the code entry (`Evidence`: date, verifier, regional, privacy,
 capability notes, sources) and summarised here. The register and `APPROVED_SELECTIONS`
 must agree.
 
 ## Changing the model or profile
+
+*Moving from the small test model to the production model is this procedure.* Nothing in the
+application depends on the model's size: it extracts canvas fields and may propose the next
+question, and every proposal is checked (a model question is shown only if it passes the
+one-question checker, otherwise the reviewed template is used), so a stronger model changes quality,
+not the rules. What it needs is the evidence below for the exact production identifier, and nothing
+can be skipped by configuration. (The per-field question wording is in `prompts.py`, not the model.)
 
 Changing an identifier is **not** only a config edit. For every change of model,
 inference profile, or the destinations behind a profile (AWS can change these):

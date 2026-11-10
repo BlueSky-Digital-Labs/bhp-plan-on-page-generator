@@ -15,8 +15,6 @@ from app.errors import ApiProblem
 
 logger = logging.getLogger("app.downloads")
 CHUNK_BYTES = 64 * 1024
-# Only the PDF of each document counts towards the deletion gate (the ticket's "both PDFs").
-COUNTED_FORMAT = "pdf"
 
 # Document downloads: why a request was refused. Fixed, content-free wording.
 DOWNLOAD_FAILURES = {
@@ -29,6 +27,7 @@ DOWNLOAD_FAILURES = {
     ),
     "not_confirmed": (409, "not_confirmed", "Confirm the canvas first."),
     "changed": (409, "conversation_changed", "Your conversation changed. Please try again."),
+    "nothing_yet": (409, "nothing_to_download", "Answer at least one question first."),
 }
 
 
@@ -51,6 +50,24 @@ def confirmed_snapshot(
         raise problem(exc) from None
 
 
+def downloadable_snapshot(
+    service: ConversationService, session: Session, revision: int
+) -> ExportSnapshot:
+    """The canvas for a download: the current revision, finished or an unfinished draft the user is
+    saving to carry on later. No confirmation is needed to keep your own work."""
+    try:
+        return service.downloadable_snapshot(session, revision)
+    except AppendixError as exc:
+        raise problem(exc) from None
+
+
+def ensure_still_current(service: ConversationService, session: Session, revision: int) -> None:
+    """Checked again after the file is built and before it is sent, so an answer that arrived
+    meanwhile cannot let an obsolete canvas through."""
+    if not service.still_current(session, revision):
+        raise problem(AppendixError("stale"))
+
+
 def ensure_still_confirmed(service: ConversationService, session: Session, revision: int) -> None:
     """Checked again after the file is built and before it is sent, so an answer that arrived
     meanwhile cannot let an obsolete canvas through."""
@@ -59,11 +76,15 @@ def ensure_still_confirmed(service: ConversationService, session: Session, revis
 
 
 def appendix_bytes(
-    service: ConversationService, session: Session, snapshot: ExportSnapshot, file_format: Format
+    service: ConversationService,
+    session: Session,
+    snapshot: ExportSnapshot,
+    file_format: Format,
+    app_name: str = "SCP AI Ideation assistant",
 ) -> bytes:
     """The appendix file for a confirmed snapshot, with the AI overview when there is one."""
     try:
-        appendix = build_input(snapshot)
+        appendix = build_input(snapshot, app_name)
         overview = service.overview_for(session, appendix.source_revision, appendix.turns)
         if overview:
             summary = dataclasses.replace(appendix.summary, overview=overview)
@@ -75,7 +96,8 @@ def appendix_bytes(
 
 def document_filename(snapshot: ExportSnapshot, kind: str, ext: str) -> str:
     stem = safe_filename_stem(str(snapshot.canvas.get("solutionName") or ""))
-    return f"{stem}-{kind}-r{snapshot.revision}.{ext}"  # ASCII letters, digits and hyphens
+    draft = "" if snapshot.complete else "-draft"  # so a saved, unfinished file is recognisable
+    return f"{stem}-{kind}{draft}-r{snapshot.revision}.{ext}"  # ASCII letters, digits and hyphens
 
 
 def delivery_recorder(
@@ -83,11 +105,10 @@ def delivery_recorder(
     session: Session,
     kind: DocumentKind,
     snapshot: ExportSnapshot,
-    file_format: str,
-) -> Callable[[], None] | None:
-    """What to do once a file has been fully sent, if this format counts towards the gate."""
-    if file_format != COUNTED_FORMAT:
-        return None
+) -> Callable[[], None]:
+    """What to do once a file has been fully sent. A document counts towards the deletion gate in
+    whatever format it was downloaded (PDF, PowerPoint, Word or JSON). A successful email counts
+    as both (see `send_email`)."""
     return lambda: service.record_delivery(session, kind, snapshot.revision)
 
 

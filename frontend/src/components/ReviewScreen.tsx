@@ -1,23 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { type CanvasView, type Conversation, confirmCanvas, getConversation } from "../api/conversation";
 import { ApiError } from "../api/client";
+import { useSubmitByEmail } from "../hooks/useSubmitByEmail";
 import { type AppendixFormat, type CanvasFormat, downloadAppendix, downloadCanvas } from "../api/appendix";
 import { DownloadMenu } from "./DownloadMenu";
+import { APPENDIX_CHOICES, CANVAS_CHOICES } from "./downloadChoices";
 import { DownloadStatus } from "./DownloadStatus";
-import { EmailPanel } from "./EmailPanel";
 import { ErrorNotice } from "./ErrorNotice";
 import { Loading } from "./Loading";
 import { OnePager } from "./OnePager";
-
-const CANVAS_CHOICES = [
-  { key: "pdf", label: "PDF" },
-  { key: "pptx", label: "PowerPoint (.pptx)" },
-];
-const APPENDIX_CHOICES = [
-  { key: "pdf", label: "PDF" },
-  { key: "docx", label: "Word (.docx)" },
-  { key: "json", label: "JSON" },
-];
 
 // Fixed copy keyed on the error code: nothing from the response is shown.
 const CHANGED = "The canvas changed since it was shown. Please read it again before confirming.";
@@ -63,9 +54,7 @@ export function ReviewScreen({
   const [notice, setNotice] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState<"canvas" | "appendix" | null>(null);
-  const [mailOpen, setMailOpen] = useState(false);
   const [downloadAttempts, setDownloadAttempts] = useState(0); // each one re-reads the status
-  const mailButton = useRef<HTMLButtonElement>(null);
 
   // `quiet` re-reads without blanking the screen (after a stale attempt).
   const load = useCallback(
@@ -104,6 +93,20 @@ export function ReviewScreen({
     setNotice(CHANGED);
     void load(undefined, true);
   }, [load]);
+
+  // One click submits the confirmed canvas and appendix by email. It is called here, before the
+  // early returns below, so the hook order never changes; with no canvas yet it is never used.
+  const email = useSubmitByEmail({
+    revision: state.phase === "ready" ? state.revision : -1,
+    onOutOfDate: failed,
+    onAccessLost,
+  });
+
+  // A successful submission unlocks deleting, like a download: read the status again.
+  const emailSent = email.sent;
+  useEffect(() => {
+    if (emailSent) setDownloadAttempts((n) => n + 1);
+  }, [emailSent]);
 
   if (state.phase === "loading") return <Loading label="Preparing your canvas…" />;
   if (state.phase === "error") return <ErrorNotice error={state.error} onRetry={() => void load()} />;
@@ -174,81 +177,73 @@ export function ReviewScreen({
   return (
     <>
       <div className="review-actions">
-        <button type="button" className="button--secondary" onClick={onBack}>
-          Back to the conversation
-        </button>
+        {/* Once confirmed the canvas is final: there is no way back to change it. */}
+        {!confirmed && (
+          <button type="button" className="button--secondary" onClick={onBack}>
+            Back to the conversation
+          </button>
+        )}
         {confirmed && (
           <>
-            <DownloadMenu
-              label="Download canvas"
-              choices={CANVAS_CHOICES}
-              busy={busy === "canvas"}
-              onChoose={(key) => void getCanvas(key as CanvasFormat)}
-            />
-            <DownloadMenu
-              label="Download appendix"
-              choices={APPENDIX_CHOICES}
-              busy={busy === "appendix"}
-              onChoose={(key) => void getAppendix(key as AppendixFormat)}
-            />
-            <button
-              type="button"
-              ref={mailButton}
-              aria-expanded={mailOpen}
-              aria-controls={mailOpen ? "mail-panel" : undefined}
-              onClick={() => setMailOpen((open) => !open)}
-            >
-              Send email
+            <button type="button" className="review-actions__main" onClick={() => void email.submit()} disabled={email.sending}>
+              {email.sending ? "Submitting…" : "Submit by email"}
             </button>
+            {/* The optional actions, to the right and in a quieter colour. */}
+            <DownloadStatus
+              revision={revision}
+              refreshKey={downloadAttempts}
+              onOutOfDate={outOfDate}
+              onPurged={onPurged}
+              onAccessLost={onAccessLost}
+            >
+              <DownloadMenu
+                label="Download canvas"
+                secondary
+                choices={CANVAS_CHOICES}
+                busy={busy === "canvas"}
+                onChoose={(key) => void getCanvas(key as CanvasFormat)}
+              />
+              <DownloadMenu
+                label="Download appendix"
+                secondary
+                choices={APPENDIX_CHOICES}
+                busy={busy === "appendix"}
+                onChoose={(key) => void getAppendix(key as AppendixFormat)}
+              />
+            </DownloadStatus>
           </>
         )}
       </div>
 
-      {confirmed && mailOpen && (
-        <div id="mail-panel">
-          <EmailPanel
-            revision={revision}
-            onClose={() => {
-              setMailOpen(false);
-              queueMicrotask(() => mailButton.current?.focus());
-            }}
-            onOutOfDate={(error) => {
-              setMailOpen(false);
-              failed(error);
-            }}
-            onAccessLost={onAccessLost}
-          />
-        </div>
+      {confirmed && (email.sent || email.error) && (
+        <section className="mail card" aria-label="Email submission">
+          {email.sent && (
+            <p role="status" className="readback__done">
+              Submitted by email. The one-page canvas and the appendix were sent as two PDF attachments.
+            </p>
+          )}
+          {email.error && (
+            <p role="alert" className="notice">
+              {email.error}
+            </p>
+          )}
+        </section>
       )}
 
-      {confirmed && (
-        <DownloadStatus
-          revision={revision}
-          refreshKey={downloadAttempts}
-          onOutOfDate={outOfDate}
-          onPurged={onPurged}
-          onAccessLost={onAccessLost}
-        />
-      )}
-
-      <section className="readback card" aria-labelledby="readback-heading">
-        <h2 id="readback-heading">Check your canvas</h2>
-        <p>
-          Read every section below. You are responsible for the facts being right
-          {typeof priority === "string" && priority ? (
-            <>
-              {" "}
-              and for the priority, <strong>{priority}</strong>, which is the one you chose
-            </>
-          ) : null}
-          . If anything is wrong, go back and tell the assistant what to change.
-        </p>
-        {confirmed ? (
-          <p role="status" className="readback__done">
-            You confirmed this version. You can download it, or send it by email, with the buttons above. Downloads are saved on your own
-            device, and an email goes only to the addresses you type. Nothing is submitted anywhere else. If you change anything, you will need to confirm again.
+      {/* Once confirmed there is nothing left to read or decide here, so the read-back card goes. */}
+      {!confirmed && (
+        <section className="readback card" aria-labelledby="readback-heading">
+          <h2 id="readback-heading">Check your canvas</h2>
+          <p>
+            Read every section below. You are responsible for the facts being right
+            {typeof priority === "string" && priority ? (
+              <>
+                {" "}
+                and for the priority, <strong>{priority}</strong>, which is the one you chose
+              </>
+            ) : null}
+            . If anything is wrong, go back and tell the assistant what to change, before you confirm.
           </p>
-        ) : (
           <div className="readback__actions">
             <button type="button" onClick={() => void confirm()} disabled={confirming}>
               {confirming ? "Confirming…" : "Yes, this is correct"}
@@ -257,13 +252,18 @@ export function ReviewScreen({
               Something is wrong: go back and correct it
             </button>
           </div>
-        )}
-        {notice && (
-          <p role="alert" className="notice">
-            {notice}
-          </p>
-        )}
-      </section>
+          {notice && (
+            <p role="alert" className="notice">
+              {notice}
+            </p>
+          )}
+        </section>
+      )}
+      {confirmed && notice && (
+        <p role="alert" className="notice">
+          {notice}
+        </p>
+      )}
 
       <OnePager canvas={canvas} />
     </>

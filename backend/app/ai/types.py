@@ -92,13 +92,15 @@ RETRYABLE = frozenset(
 
 @dataclass(frozen=True)
 class Failure:
-    """Content-free failure metadata. Never holds provider messages, prompts or output."""
+    """Content-free failure metadata. Never holds prompts or output, and holds the provider's
+    message only when BEDROCK_LOG_ERROR_TEXT=true (see failures.py)."""
 
     code: FailureCode
     partial_output: bool = False
     exception_type: str | None = None
     http_status: int | None = None
     request_id: str | None = None  # AWS request id, for support; not content
+    error_text: str | None = None  # opt-in, short, validation/not-found errors only
 
     @property
     def retryable(self) -> bool:

@@ -2,13 +2,15 @@
 
 import io
 import json
+import uuid
 import zipfile
+from datetime import timedelta
 
 import pytest
 from pypdf import PdfReader
 
 from tests.access.conftest import csrf
-from tests.interview.conftest import OPENING, browser
+from tests.interview.conftest import OPENING, FakeExtractor, browser
 from tests.interview.test_interview_api import answer_for, history, say, wire
 
 FORMATS = {"pdf": "application/pdf", "json": "application/json"}
@@ -23,6 +25,22 @@ def finish(client):
             return data
         reply, data = say(client, answer_for(reply))
     raise AssertionError("did not finish")
+
+
+def amend_behind_the_lock(world, client, text="One more detail."):
+    """An answer that reaches the store anyway (a late write from another tab): the API itself refuses
+    answers once the canvas is confirmed, but everything downstream must still cope with a changed
+    revision."""
+    revision = history(client)["revision"]
+    session_id = next(iter(world.store.sessions))
+    world.conversation._store.submit(
+        session_id,
+        uuid.uuid4().hex,
+        text,
+        revision,
+        world.clock() + timedelta(hours=1),
+        world.clock(),
+    )
 
 
 def appendix(client, fmt, revision=None):
@@ -43,14 +61,44 @@ def finish_confirmed(client):
 
 
 @pytest.mark.parametrize("fmt", ["pdf", "docx", "json"])
-def test_an_incomplete_canvas_has_no_appendix(world, fmt):
+def test_with_nothing_answered_there_is_nothing_to_download(world, fmt):
     wire(world)
     client = browser(world)
-    assert appendix(client, fmt).status_code == 409  # nothing said yet
-    say(client, OPENING)
     response = appendix(client, fmt)
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "canvas_not_ready"
+    assert response.json()["error"]["code"] == "nothing_to_download"
+
+
+@pytest.mark.parametrize("fmt", ["pdf", "docx", "json"])
+def test_an_unfinished_canvas_downloads_as_a_marked_draft_to_carry_on_later(world, fmt):
+    wire(world)
+    client = browser(world)
+    say(client, OPENING)
+    assert history(client)["canvas"]["ready_for_review"] is False
+    response = appendix(client, fmt)
+    assert response.status_code == 200
+    assert "-appendix-draft-r" in response.headers["content-disposition"]
+    if fmt == "json":
+        assert response.json()["draft"] is True
+    elif fmt == "pdf":
+        text = " ".join(
+            " ".join(
+                p.extract_text() for p in PdfReader(io.BytesIO(response.content)).pages
+            ).split()
+        )
+        assert "UNFINISHED DRAFT" in text and "attach this file" in text
+    else:
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            assert b"UNFINISHED DRAFT" in z.read("word/document.xml")
+
+
+def test_a_finished_canvas_is_not_marked_as_a_draft(world):
+    wire(world)
+    client = browser(world)
+    finish(client)
+    response = appendix(client, "json")
+    assert response.json()["draft"] is False
+    assert "-draft" not in response.headers["content-disposition"]
 
 
 def test_without_an_interviewer_there_is_nothing_to_export(world):
@@ -118,16 +166,18 @@ def test_the_pdf_carries_the_same_record(world):
         assert "".join(t["text"].split()) in flat
 
 
-def test_a_new_answer_takes_the_canvas_out_of_ready_so_nothing_half_finished_is_exported(world):
+def test_a_new_answer_takes_the_canvas_out_of_ready_so_the_next_download_is_a_draft(world):
     wire(world)
     client = browser(world)
-    finish_confirmed(client)
-    assert appendix(client, "json").status_code == 200
-    say(
-        client, "Actually, it also needs to cover night shifts."
-    )  # the interviewer asks a follow-up
+    finish(client)
+    assert appendix(client, "json").json()["draft"] is False
+    # An answer that only opens a question (which part to change?) leaves the canvas unfinished.
+    # A request that names a new value is applied at once and keeps it ready; that is covered in
+    # tests/interview. Here the model finds nothing to record, so the assistant asks which part.
+    world.conversation._producer._interviewer._extractor = FakeExtractor()
+    say(client, "Can you fix something?")
     assert history(client)["canvas"]["ready_for_review"] is False
-    assert appendix(client, "json").status_code == 409
+    assert appendix(client, "json").json()["draft"] is True
 
 
 def test_one_session_never_receives_anothers_appendix(world):

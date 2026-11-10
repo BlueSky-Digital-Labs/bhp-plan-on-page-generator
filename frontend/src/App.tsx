@@ -7,13 +7,16 @@ import { ReviewScreen } from "./components/ReviewScreen";
 import { ErrorNotice } from "./components/ErrorNotice";
 import { Layout } from "./components/Layout";
 import { Loading } from "./components/Loading";
+import { IdleWatch } from "./components/IdleWatch";
 import { StartScreen } from "./components/StartScreen";
 import { useAccess } from "./hooks/useAccess";
+import { BrandingProvider, useBranding } from "./hooks/useBranding";
 import { useAccessState } from "./hooks/useAccessState";
 import { useRequest } from "./hooks/useRequest";
 import { ROUTES, navigate, readNotice, safeRoute, usePath } from "./router";
 
 function CanvasWorkspace() {
+  const { appName } = useBranding();
   const { state, run } = useRequest(getServiceStatus);
 
   useEffect(() => {
@@ -22,7 +25,7 @@ function CanvasWorkspace() {
 
   return (
     <>
-      <h1>Plan on a Page</h1>
+      <h1>{appName}</h1>
       <p>Complete the AI Opportunity Canvas. Fields marked * are required.</p>
 
       <CanvasForm />
@@ -51,6 +54,7 @@ function Redirect({ to, notice }: { to: string; notice?: "access_required" }) {
 
 // "/": the access-code form. A browser that already has access skips straight to /start.
 function EntryRoute() {
+  const { appName } = useBranding();
   const { state, recheck } = useAccessState();
   let content;
   if (state.phase === "checking") content = <Loading label="Checking access…" />;
@@ -59,7 +63,7 @@ function EntryRoute() {
   else {
     content = (
       <>
-        <h1>Plan on a Page</h1>
+        <h1>{appName}</h1>
         {readNotice() === "access_required" && (
           <p role="status" className="notice">
             Your access has expired or has not been entered. Enter the access code to continue.
@@ -68,6 +72,18 @@ function EntryRoute() {
         {readNotice() === "session_deleted" && (
           <p role="status" className="notice">
             Your session was deleted. Nothing from it is kept. Enter the access code to start a new one.
+          </p>
+        )}
+        {readNotice() === "session_idle" && (
+          <p role="status" className="notice">
+            Your session ended because nothing happened for 15 minutes, and everything on the server was deleted. Enter the
+            access code to start a new one.
+          </p>
+        )}
+        {readNotice() === "session_stopped" && (
+          <p role="status" className="notice">
+            Your session was stopped and everything on the server was deleted. To carry on, enter the access code, start a
+            new session and attach the file you downloaded to your first answer.
           </p>
         )}
         <AccessGate onAccepted={() => navigate(ROUTES.start)} />
@@ -115,6 +131,12 @@ function SessionPage({ children }: { children: (onAccessLost: () => void) => Rea
           Sign out
         </button>
       </div>
+      {typeof state.session.idle_seconds_remaining === "number" && (
+        <IdleWatch
+          remaining={state.session.idle_seconds_remaining}
+          onEnded={() => navigate(ROUTES.entry, { replace: true, notice: "session_idle" })}
+        />
+      )}
       {children(lost)}
     </>
   );
@@ -147,13 +169,15 @@ function CanvasRoute() {
 export function App() {
   const path = usePath();
   return (
-    <Layout>
-      {path === ROUTES.entry && <EntryRoute />}
-      {path === ROUTES.start && <StartRoute />}
-      {path === ROUTES.conversation && <ConversationRoute />}
-      {path === ROUTES.review && <ReviewRoute />}
-      {path === ROUTES.canvas && <CanvasRoute />}
-      {!Object.values<string>(ROUTES).includes(path) && <Redirect to={ROUTES.entry} />}
-    </Layout>
+    <BrandingProvider>
+      <Layout>
+        {path === ROUTES.entry && <EntryRoute />}
+        {path === ROUTES.start && <StartRoute />}
+        {path === ROUTES.conversation && <ConversationRoute />}
+        {path === ROUTES.review && <ReviewRoute />}
+        {path === ROUTES.canvas && <CanvasRoute />}
+        {!Object.values<string>(ROUTES).includes(path) && <Redirect to={ROUTES.entry} />}
+      </Layout>
+    </BrandingProvider>
   );
 }

@@ -9,6 +9,14 @@ shows it folded under the answer ("Attached file: idea.docx (1,234 characters)")
 Code: `backend/app/attachments/` (reading, markers), `backend/app/api/attachments.py` (route),
 `frontend/src/api/attachments.ts` and the composer in `ConversationScreen.tsx`.
 
+## Carrying on from a saved draft
+
+Someone who stopped halfway ([downloads.md](downloads.md)) starts a new session and attaches the
+canvas PDF (or the appendix) they downloaded to their first answer. It is read like any other file,
+so the assistant sees the answers so far and carries on with what is missing. A saved file marked
+"UNFINISHED DRAFT" works the same way as any PDF. As with every attachment, a file cannot set the
+priority or skip a question: only typed words can, so those are asked again.
+
 ## How it works
 
 1. `POST /api/attachments?name=<file name>` with the raw file as the body (session, same-origin
@@ -46,7 +54,7 @@ files are read directly from their XML; no macros or embedded objects are touche
 * **A file is the user's words, not instructions**: the AI is told to record its facts and treat
   everything else as data; an instruction hidden in a file gets the same redirect as one typed.
   Only **typed** words can choose the priority or say "skip" / "I don't know": a file that says
-  "Priority: High" never sets it.
+  "Priority: Must-have" never sets it.
 * **Content-free logs**: reading a file logs only its type. File names, text and bytes are never
   logged, and error messages are fixed wording.
 * **Shown as text**: a file's text is rendered as plain text in the chat, never as markup.

@@ -16,6 +16,7 @@ class AccessRejected(Exception):
     reasons, so a client cannot learn whether a session exists.
     """
 
-    def __init__(self, reason: str) -> None:
+    def __init__(self, reason: str, session_id: str | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
+        self.session_id = session_id  # only for a session that ended idle, so its data can go

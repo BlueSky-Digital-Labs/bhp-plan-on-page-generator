@@ -1,0 +1,4 @@
+[profile rnd-bedrock]
+role_arn = arn:aws:iam::667736131634:role/bhp-plan-test-bedrock
+credential_source = EcsContainer
+role_session_name = plan-test-bedrock

@@ -10,15 +10,16 @@ async function chooseDownload(page: Page, menu: string, item: string) {
 
 // What the server says about the two PDFs. The page only shows it; the real server decides deleting.
 async function mockDownloads(page: Page, canvas: boolean, appendix: boolean, revision = 3) {
-  const lock = canvas ? "appendix_not_downloaded" : appendix ? "canvas_not_downloaded" : "both_not_downloaded";
+  const lock = canvas ? null : "canvas_not_downloaded";
   await page.route("**/api/downloads", (route) =>
     route.fulfill({
       json: {
         revision,
         canvas_downloaded: canvas,
         appendix_downloaded: appendix,
-        purge_eligible: canvas && appendix,
+        purge_eligible: canvas,
         lock_reason: canvas && appendix ? null : lock,
+        complete: true,
       },
     }),
   );
@@ -29,7 +30,7 @@ const CID = "0123456789abcdef0123456789abcdef";
 test("page renders and completes a real API round trip", async ({ page }) => {
   await signInAndWait(page);
   await page.goto("/canvas"); // the original template form and status panel
-  await expect(page.getByRole("heading", { name: "Plan on a Page", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "SCP AI Ideation assistant", level: 1 })).toBeVisible();
   // Status "ok" is the API's healthy contract. The environment name depends on how the
   // backend was started (test here, deployed in AWS), so only require one.
   await expect(page.getByTestId("status-result")).toHaveText(/^Service is ok \(\w+\)\.$/);
@@ -106,7 +107,7 @@ test("user can complete the canvas and see all required fields satisfied", async
   ]) {
     await page.getByLabel(label).fill("x");
   }
-  await page.getByRole("radio", { name: "High" }).check();
+  await page.getByRole("radio", { name: "Must-have" }).check();
   await page.getByRole("checkbox", { name: "Analyse Data" }).check();
   await expect(page.getByTestId("canvas-progress")).toHaveText("All required fields are complete.");
 });
@@ -119,11 +120,11 @@ test.describe("access code", () => {
     await expect(page.getByLabel("Access code", { exact: true })).toHaveAttribute("type", "password");
   });
 
-  test("the entry page centres the access card, and the header says BHP", async ({ page }) => {
+  test("the entry page centres the access card, under the BHP logo", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/");
     await expect(page.getByLabel("Access code", { exact: true })).toBeVisible();
-    await expect(page.locator("header")).toHaveText("BHP");
+    await expect(page.locator("header").getByRole("img", { name: "BHP" })).toBeVisible();
 
     const block = (await page.locator(".entry").boundingBox())!;
     const main = (await page.locator("main").boundingBox())!;
@@ -446,7 +447,7 @@ test.describe("conversation", () => {
 
 test.describe("one-page canvas", () => {
   const FIELDS = {
-    solutionName: "Shift Notes Assistant", team: "Operations", priority: "High",
+    solutionName: "Shift Notes Assistant", team: "Operations", priority: "Must-have",
     opportunityTypes: ["Find Information", "Generate Reports"],
     currentProcess: "Copy notes between spreadsheets", painPoints: "Takes hours", businessImpact: "",
     futureState: "One shared summary", achieve: "Faster handover", success: "Handover takes minutes",
@@ -460,8 +461,13 @@ test.describe("one-page canvas", () => {
     // Nothing offered while the canvas is incomplete (the real server says 14 answers to go).
     await expect(page.getByRole("button", { name: "Generate canvas" })).toHaveCount(0);
 
-    // The conversation feature is not exercised here, so the server's "ready" verdict is simulated.
-    await page.route("**/api/conversation", (route) => route.fulfill({ json: READY }));
+    // The conversation feature is not exercised here, so the server's "ready" verdict is simulated, with
+    // the answers a finished canvas always has (the canvas box appears once the conversation has begun).
+    const turns = [
+      { turn_id: "1".repeat(32), role: "user", text: "We copy shift notes between spreadsheets.", status: "complete" },
+      { turn_id: "2".repeat(32), role: "assistant", text: "Thanks, that is everything I need.", status: "complete" },
+    ];
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, turns } }));
     await page.reload();
     await page.getByRole("button", { name: "Generate canvas" }).click();
 
@@ -471,7 +477,7 @@ test.describe("one-page canvas", () => {
     for (const text of ["Shift Notes Assistant", "Operations", "Copy notes between spreadsheets", "Handover takes minutes", "Rostering system", "Hours saved per week"]) {
       await expect(sheet).toContainText(text);
     }
-    await expect(sheet.getByRole("listitem").filter({ hasText: "(selected)" })).toHaveCount(3); // High + 2 types
+    await expect(sheet.getByRole("listitem").filter({ hasText: "(selected)" })).toHaveCount(3); // Must-have + 2 types
     await expect(sheet).toContainText("Not provided"); // the skipped optional field is left blank
 
     // Colours come straight from the template image.
@@ -502,11 +508,13 @@ test.describe("one-page canvas", () => {
     });
     await page.goto("/review");
     await expect(page.getByRole("heading", { level: 2, name: "Check your canvas" })).toBeVisible();
-    await expect(page.getByText("the priority, High, which is the one you chose")).toBeVisible();
+    await expect(page.getByText("the priority, Must-have, which is the one you chose")).toBeVisible();
     await expect(page.getByRole("button", { name: /^Download/ })).toHaveCount(0); // nothing before confirming
 
     await page.getByRole("button", { name: "Yes, this is correct" }).click();
-    await expect(page.getByRole("status")).toContainText("You confirmed this version");
+    await expect(page.getByRole("button", { name: "Submit by email" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Check your canvas" })).toHaveCount(0); // nothing left to read
+    await expect(page.getByRole("button", { name: /Back to the conversation/ })).toHaveCount(0); // final once confirmed
 
     const files = [
       ["Download canvas", "PDF", "canvas-file?format=pdf", "shift-notes-assistant-canvas-r3.pdf"],
@@ -543,74 +551,172 @@ test.describe("one-page canvas", () => {
     await expect(page.getByRole("alert")).toContainText("The canvas is not complete yet"); // 422 from the real server
   });
 
-  test("email: the form asks for the addresses, sends the confirmed revision, and says who it went to", async ({ page }) => {
+  test("email: one click submits the confirmed revision, with no address or text to fill in", async ({ page }) => {
     await signInAndWait(page);
     await mockDownloads(page, true, true);
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
     let body: unknown = null;
     await page.route("**/api/email", (route) => {
       body = route.request().postDataJSON();
-      return route.fulfill({ json: { sent: 2 } });
+      return route.fulfill({ json: { sent: 1 } });
     });
     await page.goto("/review");
-    await page.getByRole("button", { name: "Send email" }).click();
-    const form = page.locator(".mail");
-    await expect(form.getByRole("heading", { name: "Send by email" })).toBeVisible();
-    await expect(form.getByLabel("To")).toBeFocused();
+    await expect(page.getByLabel("To")).toHaveCount(0); // nothing to type
+    expect(body).toBeNull(); // and nothing sent until the click
 
-    await form.getByLabel("To").fill("not an address");
-    await form.getByRole("button", { name: "Send email" }).click();
-    await expect(form.getByRole("alert")).toContainText("check the email addresses");
-    expect(body).toBeNull(); // nothing went to the server
-
-    await form.getByLabel("To").fill("a@example.com, b@example.org");
-    await form.getByLabel(/^Message/).fill("Please take a look.");
-    await form.getByRole("button", { name: "Send email" }).click();
-    await expect(form.getByRole("status")).toContainText("Sent to a@example.com, b@example.org");
-    expect(body).toEqual({ revision: READY.revision, to: ["a@example.com", "b@example.org"], message: "Please take a look." });
-    await form.getByRole("button", { name: "Done" }).click();
-    await expect(page.locator(".mail")).toHaveCount(0);
+    await page.getByRole("button", { name: "Submit by email" }).click();
+    await expect(page.locator(".mail").getByRole("status")).toContainText("Submitted by email");
+    expect(body).toEqual({ revision: READY.revision }); // only the revision goes to the server
   });
 
-  test("email: the real server says plainly that email is not switched on, before it builds anything", async ({ page }) => {
+  test("email: the real server says plainly that submitting is not switched on, before it builds anything", async ({ page }) => {
     await signInAndWait(page);
     await mockDownloads(page, true, true);
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
     await page.goto("/review");
-    await page.getByRole("button", { name: "Send email" }).click();
-    const form = page.locator(".mail");
-    await form.getByLabel("To").fill("someone@example.com");
-    await form.getByRole("button", { name: "Send email" }).click();
-    await expect(form.getByRole("alert")).toContainText("Email is not switched on yet"); // 503 email_unavailable
-    await expect(form.getByLabel("To")).toHaveValue("someone@example.com"); // nothing typed is lost
+    await page.getByRole("button", { name: "Submit by email" }).click();
+    await expect(page.locator(".mail").getByRole("alert")).toContainText("not switched on yet"); // 503 email_unavailable
   });
 
-  test("download status: each PDF is shown on its own, deleting stays locked until the server says both are done", async ({ page }) => {
+  test("a question with a fixed list is answered by picking and sending, or by typing instead", async ({ page }) => {
+    await signInAndWait(page);
+    const ASKING = {
+      revision: 2,
+      turns: [
+        { turn_id: "1".repeat(32), role: "user", text: "We copy shift notes between spreadsheets.", status: "complete" },
+        { turn_id: "2".repeat(32), role: "assistant", text: "What priority would you give this idea?", status: "complete" },
+      ],
+      canvas: { fields: {}, missing_required: ["priority"], ready_for_review: false },
+      progression: {
+        phase: "interview",
+        outstanding_question: {
+          target: "priority",
+          kind: "missing",
+          text: "What priority would you give this idea?",
+          choices: { multiple: false, options: ["Must-have", "Nice-to-have", "Exploratory"] },
+        },
+      },
+    };
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: ASKING }));
+    await page.route("**/api/downloads", (route) =>
+      route.fulfill({ json: { revision: 2, canvas_downloaded: false, appendix_downloaded: false, purge_eligible: false, lock_reason: "canvas_not_downloaded", complete: false } }),
+    );
+    let sent: unknown = null;
+    await page.route("**/api/conversation/turns", (route) => {
+      sent = route.request().postDataJSON();
+      return route.fulfill({
+        status: 201,
+        json: {
+          revision: 3,
+          user_turn: { turn_id: "3".repeat(32), role: "user", text: "Must-have", status: "complete" },
+          assistant_turn: { turn_id: "4".repeat(32), role: "assistant", text: "Thanks.", status: "complete" },
+        },
+      });
+    });
+    await page.goto("/conversation");
+
+    await expect(page.getByRole("group", { name: "Choose one" })).toBeVisible();
+    await expect(page.getByLabel("Your answer")).toHaveCount(0); // no text box while a list is offered
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await page.getByLabel("Must-have").check();
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect.poll(() => sent).toMatchObject({ expected_revision: 2, text: "Must-have" });
+
+    await page.reload();
+    await page.getByRole("button", { name: "Type my own answer instead" }).click();
+    await expect(page.getByLabel("Your answer")).toBeVisible();
+    await expect(page.getByRole("group", { name: "Choose one" })).toHaveCount(0);
+  });
+
+  test("saving halfway: download the canvas as it is, stop the session, and be told how to carry on", async ({ page }) => {
+    await signInAndWait(page);
+    const HALF = {
+      revision: 2,
+      turns: [
+        { turn_id: "1".repeat(32), role: "user", text: "We copy shift notes between spreadsheets.", status: "complete" },
+        { turn_id: "2".repeat(32), role: "assistant", text: "Which team?", status: "complete" },
+      ],
+      canvas: { fields: { solutionName: "Shift notes" }, missing_required: ["team", "priority"], ready_for_review: false },
+    };
+    await page.route("**/api/conversation", (route) => route.fulfill({ json: HALF }));
+    await page.route("**/api/access-state", (route) => route.fulfill({ json: { start_permitted: false } }));
+    // The status follows what the server has sent; this stands in for its records.
+    let canvasSaved = false;
+    let appendixSaved = false;
+    await page.route("**/api/downloads", (route) =>
+      route.fulfill({
+        json: {
+          revision: HALF.revision,
+          canvas_downloaded: canvasSaved,
+          appendix_downloaded: appendixSaved,
+          purge_eligible: canvasSaved,
+          lock_reason: canvasSaved ? null : "canvas_not_downloaded",
+          complete: false,
+        },
+      }),
+    );
+    await page.route("**/api/canvas-file**", (route) => {
+      canvasSaved = true;
+      return route.fulfill({ body: "%PDF-", headers: { "Content-Disposition": 'attachment; filename="shift-notes-canvas-draft-r2.pdf"' } });
+    });
+    await page.route("**/api/appendix**", (route) => {
+      appendixSaved = true;
+      return route.fulfill({ body: "%PDF-", headers: { "Content-Disposition": 'attachment; filename="shift-notes-appendix-draft-r2.pdf"' } });
+    });
+    let purged: unknown = null;
+    await page.route("**/api/session/purge", (route) => {
+      purged = route.request().postDataJSON();
+      return route.fulfill({ status: 204 });
+    });
+    await page.goto("/conversation");
+
+    const card = page.locator(".dl");
+    await expect(card.getByRole("heading", { name: "Save your progress" })).toBeVisible();
+    await expect(card.getByRole("button", { name: /^Stop session/ })).toBeDisabled(); // locked until the canvas is saved
+
+    // Only the canvas is downloaded: that alone unlocks stopping.
+    await card.getByRole("button", { name: /Download draft canvas/ }).click();
+    await card.getByRole("menuitem", { name: "PDF" }).click();
+    await expect(card.getByRole("button", { name: /^Stop session/ })).toBeEnabled({ timeout: 6000 });
+    expect(appendixSaved).toBe(false);
+
+    // The confirmation is a window over the page, not something added to the card.
+    await card.getByRole("button", { name: /^Stop session/ }).click();
+    const dialog = page.getByRole("dialog", { name: "Stop this session now?" });
+    await expect(dialog.getByText(/attach one of the files you downloaded/)).toBeVisible();
+    expect(await dialog.evaluate((el) => el.matches(":modal"))).toBe(true); // the page behind is inert
+    await dialog.getByRole("button", { name: "Yes, stop and delete everything" }).click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("status")).toContainText("Your session was stopped");
+    expect(purged).toEqual({ revision: HALF.revision });
+  });
+
+  test("download status: deleting stays locked until the server says the canvas was downloaded or emailed", async ({ page }) => {
     await signInAndWait(page);
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
-    const card = page.locator(".dl");
-    const cases: Array<[boolean, boolean, string, string, string]> = [
-      [false, false, "Not downloaded yet", "Not downloaded yet", "the one-page canvas (PDF) and the appendix (PDF)"],
-      [true, false, "Downloaded", "Not downloaded yet", "the appendix (PDF)"],
-      [false, true, "Not downloaded yet", "Downloaded", "the one-page canvas (PDF)"],
-    ];
-    for (const [canvas, appendix, canvasText, appendixText, outstanding] of cases) {
+    const del = page.getByRole("button", { name: /^Delete my session/ });
+    for (const [canvas, appendix] of [[false, false], [false, true]] as const) {
       await page.unroute("**/api/downloads");
       await mockDownloads(page, canvas, appendix);
       await page.goto("/review");
-      await expect(card.getByRole("heading", { name: "Your documents" })).toBeVisible();
-      await expect(card.locator("li", { hasText: "One-page canvas (PDF)" })).toContainText(canvasText);
-      await expect(card.locator("li", { hasText: "Appendix (PDF)" })).toContainText(appendixText);
-      await expect(card).toContainText(`Still to download: ${outstanding}.`);
-      await expect(page.getByRole("button", { name: /^Delete my session/ })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Submit by email" })).toBeVisible();
+      await expect(del).toBeDisabled();
     }
-    await expect(card).toContainText("It cannot check that the file was saved on your device");
+    await expect(page.locator(".review-actions")).not.toContainText("Refresh status"); // no explanation, no refresh
 
     await page.unroute("**/api/downloads");
-    await mockDownloads(page, true, true);
+    await mockDownloads(page, true, false); // the canvas alone is enough
     await page.goto("/review");
-    await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeVisible();
-    await expect(card).not.toContainText("Deleting is locked");
+    await expect(del).toBeEnabled();
+
+    // Layout: the email is the main button on the left; downloads and delete sit to its right, in the quieter colour.
+    const box = async (name: RegExp | string) => (await page.getByRole("button", { name }).boundingBox())!;
+    const mail = await box("Submit by email");
+    for (const name of [/^Download canvas/, /^Download appendix/, /^Delete my session/]) {
+      const other = await box(name);
+      expect(other.x).toBeGreaterThan(mail.x + mail.width);
+      await expect(page.getByRole("button", { name })).toHaveClass(/button--secondary/);
+    }
   });
 
   test("download status: a failed status check keeps deleting locked and can be retried", async ({ page }) => {
@@ -619,10 +725,10 @@ test.describe("one-page canvas", () => {
     await page.route("**/api/downloads", (route) => route.fulfill({ status: 503, json: { error: { code: "service_unavailable", message: "x", correlation_id: "0".repeat(32) } } }));
     await page.goto("/review");
     await expect(page.locator(".dl").getByRole("alert")).toContainText("We could not check the download status");
-    await expect(page.getByRole("button", { name: /^Delete my session/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeDisabled();
     await page.unroute("**/api/downloads");
     await mockDownloads(page, true, true);
-    await page.getByRole("button", { name: "Refresh status" }).click();
+    await page.getByRole("button", { name: "Check again" }).click();
     await expect(page.getByRole("button", { name: /^Delete my session/ })).toBeVisible();
   });
 
@@ -639,7 +745,7 @@ test.describe("one-page canvas", () => {
     await page.request.get("/api/session").then((r) => expect(r.status()).toBe(200)); // still signed in: nothing was touched
   });
 
-  test("deleting: after both PDFs, the user confirms and returns to entry with a plain notice", async ({ page }) => {
+  test("deleting: after the one-page canvas, the user confirms and returns to entry with a plain notice", async ({ page }) => {
     await signInAndWait(page);
     await page.route("**/api/conversation", (route) => route.fulfill({ json: { ...READY, confirmed_revision: READY.revision } }));
     await mockDownloads(page, true, true);
@@ -651,13 +757,26 @@ test.describe("one-page canvas", () => {
     });
     await page.goto("/review");
     await page.getByRole("button", { name: /^Delete my session/ }).click();
-    await expect(page.getByText(/cannot be recovered/)).toBeVisible();
-    await page.getByRole("button", { name: "Keep my session" }).click();
-    await expect(page.getByText(/cannot be recovered/)).toHaveCount(0);
+    const dialog = page.getByRole("dialog", { name: "Delete this session now?" });
+    await expect(dialog.getByText(/cannot be recovered/)).toBeVisible();
+    await dialog.getByRole("button", { name: "Keep my session" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await page.getByRole("button", { name: /^Delete my session/ }).click();
     await page.getByRole("button", { name: "Yes, delete everything" }).click();
     await expect(page).toHaveURL(/\/$/);
     await expect(page.getByRole("status")).toContainText("Your session was deleted");
+  });
+
+  test("branding: the header shows the BHP logo and the names the server is configured with", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("banner").getByRole("img", { name: "BHP" })).toBeVisible();
+    const logo = await page.getByRole("banner").getByRole("img", { name: "BHP" }).evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0);
+    expect(logo).toBe(true); // the logo file is really served
+    await expect(page.getByRole("banner")).toContainText("SCP AI Ideation assistant"); // the default; set HEADER_TEXT to change it
+    await expect(page.getByRole("contentinfo")).toContainText("BHP");
+    await expect(page).toHaveTitle("SCP AI Ideation assistant");
+    const names = await page.request.get("/api/branding").then((r) => r.json());
+    expect(Object.keys(names).sort()).toEqual(["app_name", "footer_text", "header_text"]);
   });
 
   test("prints to a single dark landscape page", async ({ page }) => {

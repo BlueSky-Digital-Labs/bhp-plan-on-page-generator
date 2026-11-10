@@ -18,8 +18,19 @@ const created = (revision = 1) => () =>
 
 afterEach(() => vi.unstubAllGlobals());
 
+// The "save your progress" card reads the download status once an answer is in; most tests are not about it.
+const idleDownloads = () =>
+  json({
+    revision: 1,
+    canvas_downloaded: false,
+    appendix_downloaded: false,
+    purge_eligible: false,
+    lock_reason: "both_not_downloaded",
+    complete: false,
+  });
+
 function setup(routes: Parameters<typeof mockApi>[0]) {
-  const api = mockApi({ "GET /api/csrf": csrfRoute, ...routes });
+  const api = mockApi({ "GET /api/csrf": csrfRoute, "GET /api/downloads": idleDownloads, ...routes });
   const onAccessLost = vi.fn();
   const view = render(<ConversationScreen onAccessLost={onAccessLost} />);
   return { ...api, onAccessLost, ...view };
@@ -166,6 +177,7 @@ describe("interview phase", () => {
   it.each([
     ["clarification", "Clarifying a detail"],
     ["data_and_systems", "Checking data and systems"],
+    ["changing", "Changing an answer"],
     ["review_ready", "Ready to review"],
   ])("shows when the server says the interview is in %s", async (phase, label) => {
     setup({ "GET /api/conversation": withPhase(phase) });
@@ -187,7 +199,7 @@ describe("interview phase", () => {
 });
 
 describe("canvas draft", () => {
-  it("shows what the server has saved beside the conversation, and refreshes it after each reply", async () => {
+  it("shows only the chat at the start, then the canvas checklist beside it once the conversation begins, refreshed after each reply", async () => {
     const canvas0 = { fields: {}, missing_required: Array(14).fill("x"), ready_for_review: false };
     const canvas1 = {
       fields: { achieve: "Faster handover" },
@@ -203,10 +215,51 @@ describe("canvas draft", () => {
       "POST /api/conversation/turns": created(),
       [STREAM]: () => ndjson([{ type: "delta", text: "Thanks. " }, { type: "complete" }]),
     });
-    expect(await screen.findByTestId("canvas-progress")).toHaveTextContent("14 required answers still to go");
+    // At the start: the chat box and nothing else.
+    expect(await screen.findByLabelText(/Describe your idea/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Your canvas so far" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("canvas-progress")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Save your progress" })).not.toBeInTheDocument();
+
     await typeAndSend("Faster handover");
+    expect(await screen.findByRole("heading", { name: "Your canvas so far" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("canvas-progress")).toHaveTextContent("13 required answers still to go"));
-    expect(within(screen.getByTestId("canvas-achieve")).getByText("Faster handover")).toBeInTheDocument();
+    expect(within(screen.getByTestId("canvas-achieve")).getByText("Answered")).toBeInTheDocument(); // a tick, not the answer
+    expect(screen.queryByText("Faster handover", { selector: ".canvas-panel *" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the canvas fields in a small box that scrolls, which a keyboard user can reach and scroll", async () => {
+    const canvas = { fields: { team: "Ops" }, missing_required: ["priority"], ready_for_review: false };
+    setup({ "GET /api/conversation": withCanvas(canvas, 1, user(), bot("complete", "Which team?")) });
+    const box = await screen.findByRole("region", { name: "Canvas fields so far" });
+    expect(box).toHaveAttribute("tabindex", "0");
+    expect(within(box).getByTestId("canvas-team")).toBeInTheDocument();
+    box.focus();
+    expect(box).toHaveFocus();
+  });
+
+  it("puts the canvas checklist and then the save card in a side column next to the chat", async () => {
+    const canvas = { fields: {}, missing_required: ["team"], ready_for_review: false };
+    setup({ "GET /api/conversation": withCanvas(canvas, 1, user(), bot("complete", "Which team?")) });
+    const chat = await screen.findByRole("region", { name: "Chat with the assistant" });
+    const canvasBox = await screen.findByRole("heading", { name: "Your canvas so far" });
+    const save = await screen.findByRole("heading", { name: "Save your progress" });
+    const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const side = screen.getByRole("complementary", { name: "Your progress" });
+    expect(side).toContainElement(canvasBox);
+    expect(side).toContainElement(save);
+    expect(side).not.toContainElement(chat);
+    expect(follows(canvasBox, save)).toBe(true);
+  });
+
+  it("keeps the save card's place while a reply is coming, without offering the downloads", async () => {
+    const canvas = { fields: {}, missing_required: ["team"], ready_for_review: false };
+    setup({
+      "GET /api/conversation": withCanvas(canvas, 1, user(), bot("pending")),
+      "GET /api/conversation/turns/22222222222222222222222222222222/stream": () => new Promise<Response>(() => {}),
+    });
+    expect(await screen.findByText(/once the assistant has replied/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Save your progress" })).not.toBeInTheDocument();
   });
 
   it("announces readiness from the server's verdict, not from anything the page works out itself", async () => {
@@ -214,9 +267,58 @@ describe("canvas draft", () => {
     setup({ "GET /api/conversation": withCanvas(ready, 2, user(), bot("complete", "All done")) });
     expect(await screen.findByTestId("canvas-progress")).toHaveTextContent("Ready for review");
   });
+
+  it("offers 'Generate canvas' in the chat under the assistant's closing message, with the answer box still there", async () => {
+    const ready = { fields: { team: "Ops" }, missing_required: [], ready_for_review: true };
+    setup({ "GET /api/conversation": withCanvas(ready, 2, user(), bot("complete", "That's everything I need.")) });
+    const chat = await screen.findByRole("region", { name: "Chat with the assistant" });
+    const button = await within(chat).findByRole("button", { name: "Generate canvas" });
+    expect(within(chat).getByLabelText("Your answer")).toBeInTheDocument();
+    expect(within(chat).getByRole("button", { name: "Send" })).toBeInTheDocument();
+    const message = within(chat).getByText("That's everything I need.");
+    expect(Boolean(message.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it("cannot be reopened once the canvas is confirmed: it goes to the review page", async () => {
+    const ready = { fields: { team: "Ops" }, missing_required: [], ready_for_review: true };
+    setup({
+      "GET /api/conversation": () =>
+        json({ revision: 2, turns: [user(), bot("complete", "Done")], canvas: ready, confirmed_revision: 2 }),
+    });
+    await waitFor(() => expect(window.location.pathname).toBe("/review"));
+  });
+
+  it("does not offer it while the canvas is unfinished", async () => {
+    const canvas = { fields: {}, missing_required: ["team"], ready_for_review: false };
+    setup({ "GET /api/conversation": withCanvas(canvas, 1, user(), bot("complete", "Which team?")) });
+    await screen.findByRole("heading", { name: "Your canvas so far" });
+    expect(screen.queryByRole("button", { name: "Generate canvas" })).not.toBeInTheDocument();
+  });
 });
 
 describe("submitting and streaming", () => {
+  it("sends on Enter only when there is text; Shift+Enter makes a new line", async () => {
+    const { calls } = setup({
+      "GET /api/conversation": [convo(0), convo(1, user(), bot("complete", "Hello."))],
+      "POST /api/conversation/turns": created(),
+    });
+    const box = await screen.findByLabelText(/Describe your idea/);
+    const posts = () => calls.filter((c) => c.key === "POST /api/conversation/turns").length;
+
+    await userEvent.type(box, "{Enter}"); // nothing typed: no send, no stray new line
+    await userEvent.type(box, "   {Enter}"); // only spaces: no send
+    expect(posts()).toBe(0);
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "My idea{Shift>}{Enter}{/Shift}more");
+    expect(box).toHaveValue("My idea\nmore");
+    expect(posts()).toBe(0);
+
+    await userEvent.type(box, "{Enter}");
+    await waitFor(() => expect(posts()).toBe(1));
+    expect(calls.find((c) => c.key === "POST /api/conversation/turns")?.init?.body).toContain("My idea\\nmore");
+  });
+
   it("sends the id, expected revision and text, then shows progress separately from stored history", async () => {
     const stream = controlledStream();
     const { calls } = setup({
@@ -588,7 +690,8 @@ describe("attaching a file", () => {
   it("never treats the assistant's text as an attachment", async () => {
     setup({ "GET /api/conversation": convo(1, user(), bot("complete", BLOCK)) });
     await screen.findByText(/Attached file: idea.json/, { selector: "p" });
-    expect(document.querySelector("details")).toBeNull();
+    const chat = screen.getByRole("region", { name: "Chat with the assistant" });
+    expect(chat.querySelector("details")).toBeNull(); // nothing in the chat is folded away like an attachment
   });
 
   it("cannot attach while an answer is being sent or a reply is on its way", async () => {
@@ -601,5 +704,129 @@ describe("attaching a file", () => {
     await typeAndSend("My idea");
     await waitFor(() => expect(screen.getByRole("button", { name: /Attach a file/ })).toBeDisabled());
     stream.end();
+  });
+});
+
+describe("saving progress to stop and carry on later", () => {
+  const incomplete = { fields: { team: "Ops" }, missing_required: ["priority"], ready_for_review: false };
+  const complete = { fields: { team: "Ops" }, missing_required: [], ready_for_review: true };
+  const card = () => screen.queryByRole("heading", { level: 2, name: "Save your progress" });
+
+  it("offers nothing before the first answer", async () => {
+    setup({ "GET /api/conversation": convo(0) });
+    await screen.findByLabelText(/Describe your idea/);
+    expect(card()).not.toBeInTheDocument();
+  });
+
+  it("offers it once an answer is in and the canvas is still unfinished, without calling the server to stop", async () => {
+    const { calls } = setup({
+      "GET /api/conversation": withCanvas(incomplete, 1, user(), bot("complete", "Which team?")),
+    });
+    expect(await screen.findByRole("heading", { level: 2, name: "Save your progress" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Download draft canvas/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Stop session/ })).toBeDisabled(); // the gate is still locked
+    expect(calls.some((c) => c.key === "POST /api/session/purge")).toBe(false);
+  });
+
+  it("is not shown for a finished canvas, which has its own review page", async () => {
+    setup({ "GET /api/conversation": withCanvas(complete, 1, user(), bot("complete", "All done")) });
+    await screen.findByRole("button", { name: "Generate canvas" });
+    expect(card()).not.toBeInTheDocument();
+  });
+
+  it("is hidden while a reply is still coming, so nothing half-written can be saved", async () => {
+    setup({
+      "GET /api/conversation": withCanvas(incomplete, 1, user(), bot("pending")),
+      "GET /api/conversation/turns/22222222222222222222222222222222/stream": () =>
+        new Promise<Response>(() => {}), // never answers
+    });
+    await screen.findByText("My idea");
+    expect(card()).not.toBeInTheDocument();
+  });
+});
+
+describe("answering from a list of choices", () => {
+  const PRIORITY = { multiple: false, options: ["Must-have", "Nice-to-have", "Exploratory"] };
+  const TYPES = { multiple: true, options: ["Find Information", "Generate Reports", "Predict Issues"] };
+  // The same history, with what the server says is outstanding.
+  const withQuestion = (choices: unknown, text = "What priority would you give this idea?", revision = 1, kind = "missing") => () =>
+    json({
+      revision,
+      turns: [user(), bot("complete", text)],
+      canvas: { fields: {}, missing_required: ["priority"], ready_for_review: false },
+      progression: { phase: "interview", outstanding_question: { target: "priority", kind, text, choices } },
+    });
+  const box = () => screen.queryByLabelText(/Describe your idea|Your answer/);
+
+  it("shows the options to pick from instead of a text box, and sends the picked wording as the answer", async () => {
+    const { calls } = setup({
+      "GET /api/conversation": [withQuestion(PRIORITY), convo(2, user(), bot("pending"))],
+      "POST /api/conversation/turns": created(),
+      [STREAM]: () => controlledStream().response(),
+    });
+    expect(await screen.findByRole("group", { name: "Choose one" })).toBeInTheDocument();
+    expect(box()).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    await userEvent.click(screen.getByLabelText("Must-have"));
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(posts(calls)).toHaveLength(1));
+    expect(body(calls)).toEqual({ submission_id: expect.stringMatching(/^[\w-]{8,64}$/), expected_revision: 1, text: "Must-have" });
+  });
+
+  it("lets several be picked for a question that takes more than one", async () => {
+    const { calls } = setup({
+      "GET /api/conversation": [withQuestion(TYPES, "What kind of help do you want?"), convo(2, user(), bot("pending"))],
+      "POST /api/conversation/turns": created(),
+      [STREAM]: () => controlledStream().response(),
+    });
+    await userEvent.click(await screen.findByLabelText("Predict Issues"));
+    await userEvent.click(screen.getByLabelText("Find Information"));
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(posts(calls)).toHaveLength(1));
+    expect(body(calls).text).toBe("Find Information, Predict Issues");
+  });
+
+  it("goes back to the text box when the user chooses to type their own answer", async () => {
+    setup({ "GET /api/conversation": withQuestion(PRIORITY) });
+    await userEvent.click(await screen.findByRole("button", { name: "Type my own answer instead" }));
+    expect(await screen.findByLabelText(/Your answer/)).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Choose one" })).not.toBeInTheDocument();
+  });
+
+  it("uses the text box when the server offers no list for the question", async () => {
+    setup({ "GET /api/conversation": withQuestion(null, "Why did you give this idea that priority?", 1, "probe") });
+    expect(await screen.findByLabelText(/Your answer/)).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Choose one" })).not.toBeInTheDocument();
+  });
+
+  it("keeps showing the choices, with the pick still there, if sending fails, and retries the same answer", async () => {
+    const { calls } = setup({
+      "GET /api/conversation": withQuestion(PRIORITY),
+      "POST /api/conversation/turns": [() => envelope("internal_error", 500), created()],
+      [STREAM]: () => controlledStream().response(),
+    });
+    await userEvent.click(await screen.findByLabelText("Exploratory"));
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Try sending again" }));
+    await waitFor(() => expect(posts(calls)).toHaveLength(2));
+    const [first, second] = posts(calls).map((c) => JSON.parse(String(c.init?.body)));
+    expect(second.text).toBe("Exploratory");
+    expect(second.submission_id).toBe(first.submission_id); // a retry of the same answer, never doubled
+  });
+
+  it("does not offer the list while a reply is still being written", async () => {
+    setup({
+      "GET /api/conversation": () =>
+        json({
+          revision: 1,
+          turns: [user(), bot("pending")],
+          canvas: { fields: {}, missing_required: ["priority"], ready_for_review: false },
+          progression: { phase: "interview", outstanding_question: { target: "priority", kind: "missing", text: "x", choices: PRIORITY } },
+        }),
+      [STREAM]: () => new Promise<Response>(() => {}),
+    });
+    await screen.findByText("My idea");
+    expect(screen.queryByRole("group", { name: "Choose one" })).not.toBeInTheDocument();
   });
 });

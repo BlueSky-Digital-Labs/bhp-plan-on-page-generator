@@ -11,6 +11,7 @@ def render_json(appendix: AppendixInput) -> bytes:
         "format": FORMAT_NAME,
         "version": FORMAT_VERSION,
         "source_revision": appendix.source_revision,
+        "draft": appendix.draft,  # true: an unfinished canvas saved to carry on later
         "included_turns": appendix.included_turns,
         "summary": {
             "overview": appendix.summary.overview,  # AI-written from the conversation, or null

@@ -1,6 +1,6 @@
-# Plan on a Page
+# SCP AI Ideation assistant
 
-Browser application for roughly 50 WAIO ROC users to complete the Plan on a Page journey
+Browser application for roughly 50 WAIO ROC users to complete the SCP AI Ideation assistant journey
 (Edge and Chrome). This repo is the application foundation: a React + TypeScript + Vite
 frontend and a FastAPI backend, packaged as one container for AWS ECS Fargate (Sydney).
 Feature work builds on the [React/JSON contract](docs/frontend-contract.md). Entry and
@@ -12,7 +12,7 @@ access-code rotation runbook. The conversation screen and its turn/stream API ar
 backend/    FastAPI app (app/), pytest tests, uv project (pyproject.toml + uv.lock)
 frontend/   Vite + React + TypeScript, Vitest tests, Playwright smoke checks (e2e/)
 Dockerfile  Multi-stage build, non-root runtime, same-origin serving
-docs/       frontend-contract.md, bedrock.md, access-control.md, conversation.md, interview.md, appendix.md, attachments.md, email.md, downloads.md, expiry.md
+docs/       frontend-contract.md, bedrock.md, access-control.md, conversation.md, interview.md, appendix.md, attachments.md, email.md, downloads.md, expiry.md, branding.md, deployment.md
 ```
 
 Requires [uv](https://docs.astral.sh/uv/) (it installs Python 3.13 itself) and Node 22+
@@ -71,6 +71,7 @@ group health check at `/api/health`.
 | `LOG_LEVEL` | no | Default `INFO`. JSON logs, metadata only. |
 | `STATIC_DIR` | no | Compiled assets; set to `/app/static` in the image. |
 | `SESSIONS_TABLE_NAME`, `ACCESS_CODE_HASH_SECRET_ID`, `COOKIE_SIGNING_KEY_SECRET_ID` | when `deployed` | Names of the DynamoDB table and the two Secrets Manager secrets for access control. Identifiers only, never secret values. See [docs/access-control.md](docs/access-control.md). |
+| `SECRETS_BACKEND` | no | `secretsmanager` (default) or `parameterstore`, for an account whose policies deny Secrets Manager. With `parameterstore` the two `*_SECRET_ID` values are SecureString parameter names starting with `/`. See [docs/deployment.md](docs/deployment.md). |
 | `CONVERSATION_PRODUCER` | no | `unavailable` (default, never fabricates replies), `interviewer_bedrock` (the guided interview using the approved Bedrock model; startup fails without one) or `test` (scripted, presentation tests only; refused when deployed). See [docs/conversation.md](docs/conversation.md) and [docs/interview.md](docs/interview.md). |
 | `ACCESS_CODE_HASH`, `COOKIE_SIGNING_KEY` | local only | Local/test secret values. Deployed reads Secrets Manager through the task role; never committed or built into assets. |
 

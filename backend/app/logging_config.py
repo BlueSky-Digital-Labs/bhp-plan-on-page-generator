@@ -13,6 +13,10 @@ _METADATA_FIELDS = (
     "input_tokens",
     "output_tokens",
     "latency_ms",
+    "http_status",
+    "request_id",
+    "request_shape",
+    "error_text",
     "reason",
     "detail",
 )

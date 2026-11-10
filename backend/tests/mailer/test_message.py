@@ -6,11 +6,14 @@ from email import policy
 import pytest
 
 from app.mailer import (
+    DEFAULT_BODY,
+    MAX_BODY_CHARS,
     MAX_RECIPIENTS,
     Attachment,
     MailerError,
     OutgoingEmail,
     UnavailableMailer,
+    clean_body,
     clean_recipients,
     compose,
     to_mime,
@@ -94,26 +97,30 @@ def test_only_allowed_domains_can_receive_when_a_list_is_set():
 # --- composing --------------------------------------------------------------------------------------
 
 
-def test_the_email_names_the_canvas_lists_both_files_and_marks_the_senders_note():
+def test_the_email_says_the_configured_text_and_names_the_solution_in_the_subject():
     out = compose(
-        ("a@example.com",), "Shift Notes Assistant", "Please read before Friday.", (PDF, APPENDIX)
+        ("a@example.com",), "Shift Notes Assistant", "Submitted for review.", (PDF, APPENDIX)
     )
-    assert out.subject == "Plan on a Page: Shift Notes Assistant"
-    assert "“Shift Notes Assistant”" in out.body
-    assert "idea-canvas-r3.pdf" in out.body and "idea-appendix-r3.pdf" in out.body
-    assert "Message from the sender:\n\nPlease read before Friday." in out.body
-    assert out.body.rstrip().endswith("Sent from the Plan on a Page app.")
+    assert out.subject == "SCP AI Ideation assistant: Shift Notes Assistant"
+    assert out.body == "Submitted for review.\n"
+    assert out.attachments == (PDF, APPENDIX)
 
 
-def test_no_note_means_no_note_heading():
-    assert "Message from the sender" not in compose(("a@example.com",), "X", "  \n ", (PDF,)).body
+def test_without_configured_text_the_email_says_the_default():
+    assert DEFAULT_BODY == (
+        "SCP AI Ideation assistant submits a one page canvas for job development "
+        "and with the 2 attachments"
+    )
+    for empty in ("", "  \n ", "\x00\x07"):
+        assert compose(("a@example.com",), "X", empty, (PDF,)).body == DEFAULT_BODY + "\n"
 
 
-def test_the_note_is_plain_text_with_control_characters_removed():
-    note = "Hi\x00 there\x07\r\nSecond line\twith tab <b>not bold</b>"
-    body = compose(("a@example.com",), "X", note, (PDF,)).body
+def test_the_text_is_plain_text_with_control_characters_removed_and_bounded():
+    text = "Hi\x00 there\x07\r\nSecond line\twith tab <b>not bold</b>"
+    body = compose(("a@example.com",), "X", text, (PDF,)).body
     assert "\x00" not in body and "\x07" not in body and "\r" not in body
     assert "Second line\twith tab <b>not bold</b>" in body  # markup is just text
+    assert len(clean_body("x" * 5000)) == MAX_BODY_CHARS
 
 
 @pytest.mark.parametrize(
@@ -129,7 +136,7 @@ def test_a_solution_name_cannot_break_the_headers(name):
 
 
 def test_a_missing_name_still_gives_a_sensible_subject():
-    assert compose(("a@example.com",), "  ", "", (PDF,)).subject == "Plan on a Page"
+    assert compose(("a@example.com",), "  ", "", (PDF,)).subject == "SCP AI Ideation assistant"
 
 
 def test_single_line_flattens_and_bounds_text():
@@ -160,7 +167,7 @@ def test_the_message_has_the_configured_sender_the_recipients_and_both_pdfs():
 def test_non_ascii_text_is_carried_in_the_body_and_subject():
     out = compose(("a@example.com",), "Café ☕ plan", "Voilà — “quotes”", (PDF,))
     message = parse(to_mime("noreply@example.com", out))
-    assert message["Subject"] == "Plan on a Page: Café ☕ plan"
+    assert message["Subject"] == "SCP AI Ideation assistant: Café ☕ plan"
     assert "Voilà — “quotes”" in message.get_body(("plain",)).get_content()
 
 
@@ -177,3 +184,9 @@ def test_the_unavailable_mailer_never_sends_and_says_so():
     with pytest.raises(MailerError) as caught:
         mailer.send(OutgoingEmail(("a@example.com",), "s", "b", ()))
     assert caught.value.code == "unavailable"
+
+
+def test_the_configured_app_name_is_used_in_the_subject():
+    out = compose(("a@example.com",), "Idea", "", (PDF,), "Integrated Operations Plan")
+    assert out.subject == "Integrated Operations Plan: Idea"
+    assert compose(("a@example.com",), " ", "", (PDF,), "Ops").subject == "Ops"

@@ -6,6 +6,7 @@ log line. In AWS, secret values come from Secrets Manager via the task role, not
 from the image or from any Vite build-time variable.
 """
 
+import re
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +16,9 @@ from pydantic import Field, SecretStr, ValidationError, ValidationInfo, field_va
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.mailer.message import is_address
+
+MAX_BRANDING_CHARS = 80
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 class AppEnv(StrEnum):
@@ -43,6 +47,10 @@ class Settings(BaseSettings):
 
     # Access control. These are identifiers (names/ARNs), not secret values. All three are
     # required when deployed so a misconfigured deployment fails at startup, not at first use.
+    # Where the two access secrets live: "secretsmanager" (the design) or "parameterstore", for an
+    # account whose policies deny Secrets Manager. With parameterstore the two *_secret_id settings
+    # are parameter names and start with "/".
+    secrets_backend: Literal["secretsmanager", "parameterstore"] = "secretsmanager"
     sessions_table_name: str | None = Field(default=None, validate_default=True)
     access_code_hash_secret_id: str | None = Field(default=None, validate_default=True)
     cookie_signing_key_secret_id: str | None = Field(default=None, validate_default=True)
@@ -53,6 +61,14 @@ class Settings(BaseSettings):
     # without one.
     conversation_producer: Literal["unavailable", "test", "interviewer_bedrock"] = "unavailable"
 
+    # What the app calls itself on screen, in the browser tab, and in the appendix and the email.
+    # Read at startup and served to the page, so changing them needs a restart, not a rebuild.
+    app_name: str = Field(default="SCP AI Ideation assistant", validate_default=True)
+    header_text: str = Field(
+        default="SCP AI Ideation assistant", validate_default=True
+    )  # beside the logo
+    footer_text: str = Field(default="BHP", validate_default=True)
+
     # Emailing the canvas and appendix. "unavailable" sends nothing; "ses" uses Amazon SES from the
     # one verified sender address below; "test" accepts and discards (presentation tests only,
     # never when deployed). With "ses" an allow-list of recipient domains is required, so the app
@@ -62,6 +78,13 @@ class Settings(BaseSettings):
     email_allowed_domains: str = Field(default="", validate_default=True)  # comma-separated
     email_configuration_set: str | None = None
     ses_region: str | None = None  # the SES region, when it is not the app's own
+    # Who a submission goes to and what it says. In AWS these are the names of two Parameter Store
+    # parameters (plain strings, read at run time so they change without a deploy); locally they are
+    # fixed values. The one recipient must be on an allowed domain. The text has a built-in default.
+    email_recipient: str | None = None
+    email_body: str | None = None
+    email_recipient_parameter: str | None = Field(default=None, validate_default=True)
+    email_body_parameter: str | None = None
 
     @property
     def allowed_email_domains(self) -> tuple[str, ...]:
@@ -86,6 +109,25 @@ class Settings(BaseSettings):
             raise ValueError("not allowed when deployed")
         return value
 
+    @field_validator("access_code_hash_secret_id", "cookie_signing_key_secret_id")
+    @classmethod
+    def _parameter_names_start_with_a_slash(cls, value: str | None, info: ValidationInfo):
+        if (
+            value
+            and info.data.get("secrets_backend") == "parameterstore"
+            and not value.startswith("/")
+        ):
+            raise ValueError("must be a parameter name starting with / for parameterstore")
+        return value
+
+    @field_validator("app_name", "header_text", "footer_text")
+    @classmethod
+    def _plain_short_text(cls, value: str) -> str:
+        text = re.sub(r"\s+", " ", value).strip()
+        if not text or len(text) > MAX_BRANDING_CHARS or _CONTROL.search(text):
+            raise ValueError(f"must be 1 to {MAX_BRANDING_CHARS} plain characters")
+        return text
+
     @field_validator("email_delivery")
     @classmethod
     def _no_test_mailer_when_deployed(cls, value: str, info: ValidationInfo) -> str:
@@ -99,6 +141,29 @@ class Settings(BaseSettings):
         if info.data.get("email_delivery") == "ses" and not (value and is_address(value.strip())):
             raise ValueError("a plain email address is required for ses")
         return value.strip() if value else None
+
+    @field_validator("email_recipient_parameter", "email_body_parameter")
+    @classmethod
+    def _email_parameter_names(cls, value: str | None, info: ValidationInfo) -> str | None:
+        value = value.strip() if value else None
+        if value and not value.startswith("/"):
+            raise ValueError("must be a parameter name starting with /")
+        if (
+            info.field_name == "email_recipient_parameter"
+            and info.data.get("email_delivery") == "ses"
+            and not value
+            and not (info.data.get("email_recipient") or "").strip()
+        ):
+            raise ValueError("a recipient, or the parameter that holds it, is required for ses")
+        return value
+
+    @field_validator("email_recipient")
+    @classmethod
+    def _recipient_is_a_plain_address(cls, value: str | None) -> str | None:
+        value = value.strip() if value else None
+        if value and not is_address(value):
+            raise ValueError("must be a plain email address")
+        return value or None
 
     @field_validator("email_allowed_domains")
     @classmethod

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -31,12 +31,55 @@ afterEach(() => {
 
 const startButton = () => screen.queryByRole("button", { name: "Start a new canvas" });
 
+describe("configured names", () => {
+  const configured = () =>
+    json({ app_name: "Integrated Operations Plan on a Page", header_text: "Integrated Operations", footer_text: "BHP · Integrated Operations" });
+
+  it("shows the configured name in the header, the entry heading, the footer and the browser tab, with the BHP logo", async () => {
+    mockApi({ "GET /api/branding": configured, "GET /api/access-state": NOT_PERMITTED });
+    render(<App />);
+    expect(await screen.findByRole("heading", { level: 1, name: "Integrated Operations Plan on a Page" })).toBeInTheDocument();
+    expect(screen.getByRole("banner")).toHaveTextContent("Integrated Operations");
+    expect(screen.getByRole("contentinfo")).toHaveTextContent("BHP · Integrated Operations");
+    expect(screen.getByRole("img", { name: "BHP" })).toHaveAttribute("src", "/bhp-logo.png");
+    expect(document.title).toBe("Integrated Operations Plan on a Page");
+  });
+
+  it("uses the default names if they cannot be read, and the app still works", async () => {
+    mockApi({ "GET /api/branding": () => envelope("service_unavailable", 503), "GET /api/access-state": NOT_PERMITTED });
+    render(<App />);
+    expect(await screen.findByRole("heading", { level: 1, name: "SCP AI Ideation assistant" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Access code")).toBeInTheDocument();
+    expect(document.title).toBe("SCP AI Ideation assistant");
+  });
+
+  it("shows a configured name as plain text, never as markup", async () => {
+    mockApi({
+      "GET /api/branding": () => json({ app_name: "<img src=x onerror=alert(1)>", header_text: "<b>Ops</b>", footer_text: "BHP" }),
+      "GET /api/access-state": NOT_PERMITTED,
+    });
+    render(<App />);
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent("<img src=x onerror=alert(1)>");
+    expect(document.querySelector("header b, main img")).toBeNull();
+  });
+});
+
 describe("entry route /", () => {
   it("shows the access form to a visitor without access, and nothing protected", async () => {
     mockApi({ "GET /api/access-state": NOT_PERMITTED });
     render(<App />);
     expect(await screen.findByLabelText("Access code")).toBeInTheDocument();
     expect(startButton()).not.toBeInTheDocument();
+  });
+
+  it("tells someone whose session was stopped halfway how to carry on, and shows nothing from it", async () => {
+    mockApi({ "GET /api/access-state": NOT_PERMITTED });
+    window.history.replaceState({ notice: "session_stopped" }, "", "/");
+    render(<App />);
+    expect(await screen.findByLabelText("Access code")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Your session was stopped and everything on the server was deleted. To carry on, enter the access code, start a new session and attach the file you downloaded to your first answer.",
+    );
   });
 
   it("sends a browser that already has access straight to /start", async () => {
@@ -72,7 +115,7 @@ describe("entry route /", () => {
   });
 
   it("shows a safe, retryable error if the access check fails", async () => {
-    const { fn } = mockApi({
+    const { calls } = mockApi({
       "GET /api/access-state": [() => envelope("service_unavailable", 503, CID), NOT_PERMITTED],
     });
     render(<App />);
@@ -82,7 +125,7 @@ describe("entry route /", () => {
     expect(screen.queryByLabelText("Access code")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByLabelText("Access code")).toBeInTheDocument();
-    expect(fn).toHaveBeenCalledTimes(2);
+    expect(calls).toHaveLength(2);
   });
 });
 
@@ -93,7 +136,7 @@ describe("protected route /start", () => {
     mockApi({ "GET /api/access-state": () => pending });
     at("/start");
     render(<App />);
-    expect(screen.getByRole("status")).toHaveTextContent("Checking access");
+    expect(await screen.findByRole("status")).toHaveTextContent("Checking access");
     expect(startButton()).not.toBeInTheDocument();
     expect(screen.queryByText(/What you will do/)).not.toBeInTheDocument();
     answer(PERMITTED());
@@ -148,6 +191,32 @@ describe("protected route /start", () => {
     expect(window.location.hostname).not.toBe("evil.example");
   });
 
+  it("shows no idle warning with plenty of time, and an older server (no idle limit sent) shows none either", async () => {
+    mockApi({
+      "GET /api/csrf": csrfRoute,
+      "GET /api/session": () => json({ ...SESSION, idle_seconds_remaining: 900 }),
+      "GET /api/conversation": EMPTY_CONVERSATION,
+    });
+    at("/conversation");
+    render(<App />);
+    expect(await screen.findByLabelText("Describe your idea")).toBeInTheDocument();
+    expect(screen.queryByText(/about to end/)).not.toBeInTheDocument();
+  });
+
+  it("warns before the session ends for want of activity, then explains plainly on the entry page when it did", async () => {
+    mockApi({
+      "GET /api/access-state": NOT_PERMITTED,
+      "GET /api/csrf": csrfRoute,
+      "GET /api/session": () => json({ ...SESSION, idle_seconds_remaining: 2 }),
+      "GET /api/conversation": EMPTY_CONVERSATION,
+    });
+    at("/conversation");
+    render(<App />);
+    expect(await screen.findByText(/about to end/)).toBeInTheDocument();
+    await waitFor(() => expect(window.location.pathname).toBe("/"), { timeout: 4000 });
+    expect(await screen.findByText(/nothing happened for 15 minutes/)).toBeInTheDocument();
+  });
+
   it("returns to entry if access expires between the check and the click", async () => {
     mockApi({
       "GET /api/access-state": [PERMITTED, NOT_PERMITTED],
@@ -192,7 +261,7 @@ describe("conversation route", () => {
 });
 
 describe("review route (read-back, confirmation and downloads)", () => {
-  const FIELDS = { solutionName: "Shift Notes Assistant", team: "Ops", priority: "High", opportunityTypes: ["Analyse Data"] };
+  const FIELDS = { solutionName: "Shift Notes Assistant", team: "Ops", priority: "Must-have", opportunityTypes: ["Analyse Data"] };
   const review = (revision: number, confirmed: number | null) => () =>
     json({
       revision,
@@ -221,14 +290,14 @@ describe("review route (read-back, confirmation and downloads)", () => {
         revision,
         canvas_downloaded: canvas,
         appendix_downloaded: appendix,
-        purge_eligible: canvas && appendix,
-        lock_reason: canvas && appendix ? null : canvas ? "appendix_not_downloaded" : appendix ? "canvas_not_downloaded" : "both_not_downloaded",
+        purge_eligible: canvas, // the one-page canvas alone unlocks deleting
+        lock_reason: canvas ? null : "canvas_not_downloaded",
       });
   const open = async (routes: Parameters<typeof mockApi>[0]) => {
     const api = mockApi({ "GET /api/session": SIGNED_IN, "GET /api/csrf": csrfRoute, "GET /api/downloads": downloads(), ...routes });
     at("/review");
     render(<App />);
-    await screen.findByRole("heading", { level: 2, name: "Check your canvas" });
+    await screen.findByRole("heading", { level: 1, name: /AI OPPORTUNITY CANVAS/ }); // the canvas itself
     return api;
   };
   const menus = () => screen.queryAllByRole("button", { name: /^Download (canvas|appendix)/ });
@@ -238,7 +307,7 @@ describe("review route (read-back, confirmation and downloads)", () => {
     expect(screen.getByRole("heading", { level: 1, name: /AI OPPORTUNITY CANVAS/ })).toBeInTheDocument();
     expect(screen.getByText("Shift Notes Assistant")).toBeInTheDocument();
     const readBack = screen.getByRole("heading", { name: "Check your canvas" }).parentElement!;
-    expect(readBack).toHaveTextContent("and for the priority, High, which is the one you chose");
+    expect(readBack).toHaveTextContent("and for the priority, Must-have, which is the one you chose");
     expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument();
     expect(menus()).toHaveLength(0);
   });
@@ -249,7 +318,7 @@ describe("review route (read-back, confirmation and downloads)", () => {
       "POST /api/canvas/confirm": review(3, 3),
     });
     await userEvent.click(screen.getByRole("button", { name: "Yes, this is correct" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("You confirmed this version");
+    expect(await screen.findByRole("button", { name: "Submit by email" })).toBeInTheDocument();
     expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/canvas/confirm")!.init?.body))).toEqual({ revision: 3 });
     expect(screen.getByRole("button", { name: /^Download canvas/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Download appendix/ })).toBeInTheDocument();
@@ -266,6 +335,13 @@ describe("review route (read-back, confirmation and downloads)", () => {
     await open({ "GET /api/conversation": review(4, 3) }); // answered again since confirming
     expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument();
     expect(menus()).toHaveLength(0);
+  });
+
+  it("offers no way back to the conversation once the canvas is confirmed", async () => {
+    await open({ "GET /api/conversation": review(3, 3) });
+    expect(screen.queryByRole("button", { name: /Back to the conversation/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /go back and correct it/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/You confirmed this version|Check your canvas/)).not.toBeInTheDocument(); // nothing left to read
   });
 
   it("lets the user go back to correct something through the conversation", async () => {
@@ -381,8 +457,7 @@ describe("review route (read-back, confirmation and downloads)", () => {
     it("shows the two documents for the confirmed revision, with deleting locked", async () => {
       await open({ "GET /api/conversation": review(3, 3) });
       expect(await screen.findByRole("heading", { level: 2, name: "Your documents" })).toBeInTheDocument();
-      expect(await screen.findByText(/Deleting is locked/)).toBeInTheDocument();
-      expect(deleteButton()).not.toBeInTheDocument();
+      expect(deleteButton()).toBeDisabled();
     });
 
     it("shows the status after confirming, for the revision just confirmed", async () => {
@@ -401,25 +476,25 @@ describe("review route (read-back, confirmation and downloads)", () => {
         "GET /api/downloads": [downloads(false, false), downloads(true, true)],
         "GET /api/canvas-file?format=pdf&revision=3": file(),
       });
-      await screen.findByText(/Deleting is locked/);
-      expect(deleteButton()).not.toBeInTheDocument();
+      await waitFor(() => expect(reads(calls)).toBe(1));
+      expect(deleteButton()).toBeDisabled();
       await chooseDownload("Download canvas", "PDF");
       await waitFor(() => expect(saved).toHaveLength(1));
-      expect(await screen.findByRole("button", { name: /^Delete my session/ })).toBeInTheDocument();
+      await waitFor(() => expect(deleteButton()).toBeEnabled());
       expect(reads(calls)).toBeGreaterThanOrEqual(2);
     });
 
     it("does not unlock deleting just because a download was clicked", async () => {
-      await open({
+      const { calls } = await open({
         "GET /api/conversation": review(3, 3),
         "GET /api/downloads": downloads(false, false), // the server has not finished sending anything
         "GET /api/canvas-file?format=pdf&revision=3": file(),
       });
-      await screen.findByText(/Deleting is locked/);
+      await waitFor(() => expect(reads(calls)).toBe(1));
       await chooseDownload("Download canvas", "PDF");
       await waitFor(() => expect(saved).toHaveLength(1));
-      await waitFor(() => expect(screen.getByText(/Deleting is locked/)).toBeInTheDocument());
-      expect(deleteButton()).not.toBeInTheDocument();
+      await waitFor(() => expect(reads(calls)).toBeGreaterThanOrEqual(2));
+      expect(deleteButton()).toBeDisabled();
     });
 
     it("re-reads the canvas when the status belongs to a newer revision", async () => {
@@ -460,42 +535,53 @@ describe("review route (read-back, confirmation and downloads)", () => {
     });
   });
 
-  describe("sending by email", () => {
-    // The toolbar button comes first on the page; the open form has a second one of the same name.
-    const mailButton = () => screen.queryAllByRole("button", { name: "Send email" })[0] ?? null;
-    const emailForm = () => screen.queryByRole("heading", { level: 2, name: "Send by email" });
-    // The form has its own "Send email" button; the one in the toolbar opens the form.
-    const submitEmail = () =>
-      userEvent.click(within(emailForm()!.closest("section")!).getByRole("button", { name: "Send email" }));
+  describe("submitting by email", () => {
+    const mailButton = () => screen.queryByRole("button", { name: /^(Submit by email|Submitting…)$/ });
+    const deleteButton = () => screen.queryByRole("button", { name: /^Delete my session/ });
 
     it("offers no email before the canvas is confirmed", async () => {
       await open({ "GET /api/conversation": review(3, null) });
       expect(mailButton()).not.toBeInTheDocument();
-      expect(emailForm()).not.toBeInTheDocument();
     });
 
-    it("offers it for the confirmed revision, and opens and closes the form without sending anything", async () => {
+    it("sends nothing until the button is clicked, and asks for nothing first", async () => {
       const { calls } = await open({ "GET /api/conversation": review(3, 3) });
-      expect(emailForm()).not.toBeInTheDocument();
-      await userEvent.click(mailButton()!);
-      expect(emailForm()).toBeInTheDocument();
-      expect(mailButton()).toHaveAttribute("aria-expanded", "true");
-      await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-      expect(emailForm()).not.toBeInTheDocument();
-      expect(mailButton()).toHaveFocus();
+      expect(mailButton()).toBeInTheDocument();
+      expect(screen.queryByLabelText("To")).not.toBeInTheDocument();
       expect(calls.some((c) => c.key === "POST /api/email")).toBe(false);
     });
 
-    it("sends the confirmed revision and says who it went to", async () => {
+    it("submits the confirmed revision in one click and says it was sent", async () => {
       const { calls } = await open({
         "GET /api/conversation": review(3, 3),
         "POST /api/email": () => json({ sent: 1 }),
       });
       await userEvent.click(mailButton()!);
-      await userEvent.type(screen.getByLabelText("To"), "someone@example.com");
-      await submitEmail();
-      expect(await screen.findByText(/^Sent to someone@example.com/)).toBeInTheDocument();
-      expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/email")!.init?.body))).toMatchObject({ revision: 3 });
+      expect(await screen.findByText(/^Submitted by email\./)).toBeInTheDocument();
+      expect(JSON.parse(String(calls.find((c) => c.key === "POST /api/email")!.init?.body))).toEqual({ revision: 3 });
+    });
+
+    it("unlocks deleting once the submission has been emailed, as a download does", async () => {
+      await open({
+        "GET /api/conversation": review(3, 3),
+        "GET /api/downloads": [downloads(false, false), downloads(true, true)], // the server counts the send
+        "POST /api/email": () => json({ sent: 1 }),
+      });
+      await waitFor(() => expect(deleteButton()).toBeDisabled());
+      await userEvent.click(mailButton()!);
+      await screen.findByText(/^Submitted by email\./);
+      await waitFor(() => expect(deleteButton()).toBeEnabled());
+    });
+
+    it("puts the email first and the downloads and delete after it, in the quieter colour", async () => {
+      await open({ "GET /api/conversation": review(3, 3) });
+      const main = mailButton()!;
+      const optional = [screen.getByRole("button", { name: /^Download canvas/ }), screen.getByRole("button", { name: /^Download appendix/ }), deleteButton()!];
+      for (const button of optional) {
+        expect(Boolean(main.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+        expect(button).toHaveClass("button--secondary");
+      }
+      expect(main).not.toHaveClass("button--secondary");
     });
 
     it("re-reads the canvas and drops the email and download buttons when the confirmation no longer applies", async () => {
@@ -504,11 +590,8 @@ describe("review route (read-back, confirmation and downloads)", () => {
         "POST /api/email": () => envelope("revision_conflict", 409),
       });
       await userEvent.click(mailButton()!);
-      await userEvent.type(screen.getByLabelText("To"), "someone@example.com");
-      await submitEmail();
       expect(await screen.findByRole("alert")).toHaveTextContent("The canvas changed since it was shown");
       await waitFor(() => expect(mailButton()).not.toBeInTheDocument());
-      expect(emailForm()).not.toBeInTheDocument();
       expect(menus()).toHaveLength(0);
       expect(screen.getByRole("button", { name: "Yes, this is correct" })).toBeInTheDocument();
     });
@@ -519,8 +602,6 @@ describe("review route (read-back, confirmation and downloads)", () => {
         "POST /api/email": () => envelope("unauthenticated", 401),
       });
       await userEvent.click(mailButton()!);
-      await userEvent.type(screen.getByLabelText("To"), "someone@example.com");
-      await submitEmail();
       await waitFor(() => expect(window.location.pathname).toBe("/"));
     });
   });

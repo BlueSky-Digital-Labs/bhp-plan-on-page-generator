@@ -1,21 +1,44 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api/client";
 import { type DownloadStatus as Status, getDownloadStatus, purgeSession } from "../api/downloads";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 // A download can finish just after the first status check, so after each download attempt the
-// status is read again a couple of times, then left to the manual "Refresh status" button.
-const FOLLOW_UPS_MS = [1500, 4000];
+// status is read again a few times, then left until the next attempt (or "Check again" after a failed read).
+const FOLLOW_UPS_MS = [1500, 4000, 10000];
 
-// Fixed copy keyed on the lock reason: nothing from the response is shown.
-const OUTSTANDING: Record<string, string> = {
-  both_not_downloaded: "the one-page canvas (PDF) and the appendix (PDF)",
-  canvas_not_downloaded: "the one-page canvas (PDF)",
-  appendix_not_downloaded: "the appendix (PDF)",
-};
-const PURGE_MESSAGES: Record<string, string> = {
-  purge_locked: "Deleting is still locked. Please download both PDFs first.",
-  revision_conflict: "The canvas changed since it was shown. Please read it again before deleting.",
-};
+const OUT_OF_DATE_PURGE = "The canvas changed since it was shown. Please read it again before continuing.";
+
+// The same panel serves a finished canvas ("final": delete the session) and an unfinished one the
+// user is saving to carry on later ("draft": stop the session). Only the wording differs; the
+// server's gate is the same rule for both.
+const COPY = {
+  final: {
+    heading: "Your documents",
+    failedCheck: "We could not check the download status. Deleting stays locked until it has been checked.",
+    open: "Delete my session…",
+    confirmTitle: "Delete this session now?",
+    confirmBody: "Your conversation, canvas and documents are removed from the server and cannot be recovered.",
+    lockedHint: "Download the one-page canvas, or submit it by email, first.",
+    confirmYes: "Yes, delete everything",
+    confirmNo: "Keep my session",
+    working: "Deleting…",
+    purgeLocked: "Deleting is still locked. Please download the one-page canvas or submit it by email first.",
+  },
+  draft: {
+    heading: "Save your progress",
+    failedCheck: "We could not check the download status. Stopping stays locked until it has been checked.",
+    open: "Stop session…",
+    confirmTitle: "Stop this session now?",
+    confirmBody:
+      "Your conversation and draft are removed from the server and cannot be recovered. To carry on, you will start a new session and attach one of the files you downloaded.",
+    lockedHint: "Download the one-page canvas first.",
+    confirmYes: "Yes, stop and delete everything",
+    confirmNo: "Keep going",
+    working: "Stopping…",
+    purgeLocked: "Stopping is still locked. Please download the one-page canvas first.",
+  },
+} as const;
 const FAILED = "That could not be done. Please try again.";
 
 type State =
@@ -23,24 +46,28 @@ type State =
   | { phase: "ready"; status: Status }
   | { phase: "failed" };
 
-// Shows, for the current revision, whether the server has finished sending each PDF, why deleting
-// is locked, and the delete action only when the server says both are done. "Downloaded" means the
+// Shows, for the current revision, whether the server has finished sending the one-page canvas, and the
+// delete action, which unlocks only when the server says it was sent. "Downloaded" means the
 // server sent the whole file: it cannot know whether the browser kept it or the user saved it.
 export function DownloadStatus({
   revision,
   refreshKey,
+  variant = "final",
+  children,
   onOutOfDate,
   onPurged,
   onAccessLost,
 }: {
   revision: number;
   refreshKey: number; // bumped by the page after each download attempt
+  variant?: "final" | "draft";
+  children?: ReactNode; // shown under the heading, e.g. the download buttons
   onOutOfDate: () => void;
   onPurged: () => void;
   onAccessLost: () => void;
 }) {
+  const copy = COPY[variant];
   const [state, setState] = useState<State>({ phase: "checking" });
-  const [last, setLast] = useState<Status | null>(null); // for the rows only, never for deleting
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -61,7 +88,6 @@ export function DownloadStatus({
       const status = await getDownloadStatus();
       if (!live.current || mine !== latest.current) return;
       if (status.revision !== revision) return onOutOfDate(); // answered again, in another tab
-      setLast(status);
       setState({ phase: "ready", status });
       if (!status.purge_eligible) setConfirming(false);
     } catch (error) {
@@ -90,7 +116,7 @@ export function DownloadStatus({
       if (!live.current) return;
       if (error instanceof ApiError && error.status === 401) return onAccessLost();
       const code = error instanceof ApiError ? error.code : "";
-      setNotice(PURGE_MESSAGES[code] ?? FAILED);
+      setNotice(code === "purge_locked" ? copy.purgeLocked : code === "revision_conflict" ? OUT_OF_DATE_PURGE : FAILED);
       setConfirming(false);
       if (code === "revision_conflict") onOutOfDate();
       else void refresh();
@@ -100,95 +126,101 @@ export function DownloadStatus({
   };
 
   const status = state.phase === "ready" ? state.status : null;
-  const known = status ?? last;
-  // undefined: being checked. null: the check failed, so the state is unknown.
-  const row = (label: string, done: boolean | null | undefined) => (
-    <li>
-      <span className="dl__name">{label}</span>{" "}
-      {done === undefined ? (
-        <span className="dl__state">Checking…</span>
-      ) : done === null ? (
-        <span className="dl__state">
-          <span aria-hidden="true">? </span>Could not be checked
-        </span>
-      ) : done ? (
-        <span className="dl__state dl__state--done">
-          <span aria-hidden="true">✓ </span>Downloaded
-        </span>
-      ) : (
-        <span className="dl__state">
-          <span aria-hidden="true">○ </span>Not downloaded yet
-        </span>
-      )}
-    </li>
+  const eligible = Boolean(status?.purge_eligible);
+  const dialog = confirming && eligible && (
+    <ConfirmDialog
+      title={copy.confirmTitle}
+      body={copy.confirmBody}
+      confirmLabel={copy.confirmYes}
+      cancelLabel={copy.confirmNo}
+      workingLabel={copy.working}
+      working={deleting}
+      onConfirm={() => void remove()}
+      onCancel={() => setConfirming(false)}
+    />
   );
 
-  return (
-    <section className="dl card" aria-labelledby="dl-heading">
-      <h2 id="dl-heading">Your documents</h2>
-      <ul className="dl__list">
-        {row("One-page canvas (PDF)", state.phase === "failed" ? null : known?.canvas_downloaded)}
-        {row("Appendix (PDF)", state.phase === "failed" ? null : known?.appendix_downloaded)}
-      </ul>
+  const stopButton = (
+    <button
+      type="button"
+      className="button--danger dl__stop"
+      disabled={!eligible}
+      aria-describedby={eligible ? undefined : "dl-stop-hint"}
+      title={eligible ? undefined : copy.lockedHint}
+      onClick={() => setConfirming(true)}
+    >
+      {copy.open}
+    </button>
+  );
+  const stopHint = !eligible && (
+    <span id="dl-stop-hint" className="sr-only">
+      {copy.lockedHint}
+    </span>
+  );
 
-      {state.phase === "failed" && (
-        <p role="alert" className="notice">
-          We could not check the download status. Deleting stays locked until it has been checked.
-        </p>
-      )}
-      {status && !status.purge_eligible && (
-        <p className="dl__locked">
-          <strong>Deleting is locked.</strong>{" "}
-          {OUTSTANDING[status.lock_reason ?? ""]
-            ? `Still to download: ${OUTSTANDING[status.lock_reason ?? ""]}.`
-            : "The current canvas must be confirmed and both PDFs downloaded first."}
-        </p>
-      )}
-      {status?.purge_eligible && (
-        <p role="status" className="readback__done">
-          Both PDFs have been downloaded. You can delete this session when you are ready.
-        </p>
-      )}
-
-      <p className="dl__help">
-        Save both PDFs somewhere you can find them before you delete anything. &ldquo;Downloaded&rdquo; means this app
-        finished sending the file to your browser. It cannot check that the file was saved on your device, and nothing is
-        submitted to a backlog. If a download is slow, the status may take a moment: choose Refresh status, which does not
-        download the file again.
-      </p>
-
-      <div className="dl__actions">
-        <button type="button" className="button--secondary" onClick={() => void refresh()} disabled={state.phase === "checking"}>
-          Refresh status
-        </button>
-        {status?.purge_eligible && !confirming && (
-          <button type="button" className="button--danger" onClick={() => setConfirming(true)}>
-            Delete my session…
-          </button>
-        )}
-      </div>
-
-      {status?.purge_eligible && confirming && (
-        <div className="dl__confirm" role="group" aria-labelledby="dl-confirm-heading">
-          <p id="dl-confirm-heading">
-            <strong>Delete this session now?</strong> Your conversation, canvas and documents are removed from the server
-            and cannot be recovered.
+  if (variant === "draft") {
+    // The half-way card is just the download buttons and the way to stop, which unlocks the moment the
+    // one-page canvas has been downloaded. Everything else is left out to keep it small.
+    return (
+      <section className="dl dl--bare card" aria-labelledby="dl-heading">
+        <h2 id="dl-heading" className="sr-only">
+          {copy.heading}
+        </h2>
+        {children}
+        {stopButton}
+        {stopHint}
+        {state.phase === "failed" && (
+          <p role="alert" className="notice">
+            {copy.failedCheck}{" "}
+            <button type="button" className="button--secondary" onClick={() => void refresh()}>
+              Check again
+            </button>
           </p>
-          <div className="dl__actions">
-            <button type="button" className="button--danger" onClick={() => void remove()} disabled={deleting}>
-              {deleting ? "Deleting…" : "Yes, delete everything"}
-            </button>
-            <button type="button" className="button--secondary" onClick={() => setConfirming(false)} disabled={deleting}>
-              Keep my session
-            </button>
-          </div>
-        </div>
+        )}
+        {notice && (
+          <p role="alert" className="notice">
+            {notice}
+          </p>
+        )}
+        {dialog}
+      </section>
+    );
+  }
+
+  // On the review page: the optional downloads (the children) and the way to delete, in one group on
+  // the right of the main button. The delete button is styled like the downloads and unlocks once the
+  // one-page canvas has been downloaded or the submission has been emailed.
+  return (
+    <section className="dl dl--inline" aria-labelledby="dl-heading">
+      <h2 id="dl-heading" className="sr-only">
+        {copy.heading}
+      </h2>
+      {children}
+      <button
+        type="button"
+        className="button--secondary dl__stop"
+        disabled={!eligible}
+        aria-describedby={eligible ? undefined : "dl-stop-hint"}
+        title={eligible ? undefined : copy.lockedHint}
+        onClick={() => setConfirming(true)}
+      >
+        {copy.open}
+      </button>
+      {stopHint}
+      {state.phase === "failed" && (
+        <p role="alert" className="notice dl__wide">
+          {copy.failedCheck}{" "}
+          <button type="button" className="button--secondary" onClick={() => void refresh()}>
+            Check again
+          </button>
+        </p>
       )}
       {notice && (
-        <p role="alert" className="notice">
+        <p role="alert" className="notice dl__wide">
           {notice}
         </p>
       )}
+      {dialog}
     </section>
   );
 }

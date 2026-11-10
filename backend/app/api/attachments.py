@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from starlette.concurrency import run_in_threadpool
 
 from app.access.store import Session
-from app.api.access import current_session, require_csrf
+from app.api.access import active_session, require_csrf
 from app.attachments.markers import block
 from app.attachments.readers import MAX_BYTES, AttachmentError, extract
 from app.errors import ApiProblem
@@ -29,7 +29,7 @@ _TOO_LARGE = ApiProblem(413, "file_too_large", "That file is too large.")
 @router.post("/attachments", dependencies=[Depends(require_csrf)])
 async def read_attachment(
     request: Request,
-    session: Annotated[Session, Depends(current_session)],
+    session: Annotated[Session, Depends(active_session)],
     name: Annotated[str, Query(min_length=1, max_length=255)],
 ) -> dict:
     """The raw file is the request body. It is read in memory and discarded: nothing is stored, and

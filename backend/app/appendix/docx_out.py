@@ -7,6 +7,7 @@ import zipfile
 from xml.sax.saxutils import escape
 
 from app.appendix.model import (
+    DRAFT_NOTE,
     INTRO,
     OVERVIEW_LABEL,
     OVERVIEW_NOTE,
@@ -77,12 +78,13 @@ def _paragraph(text: str, style: str = "Normal", *, muted: bool = False) -> str:
 
 def render_docx(appendix: AppendixInput) -> bytes:
     body = [
-        _paragraph("Plan on a Page: Appendix", "Title"),
+        _paragraph(f"{appendix.app_name}: Appendix", "Title"),
         _paragraph(INTRO, "Note"),
         _paragraph(
             f"Source revision {appendix.source_revision} · {appendix.included_turns} conversation turns",
             "Note",
         ),
+        *([_paragraph(DRAFT_NOTE, "Note")] if appendix.draft else []),
         _paragraph(SNAPSHOT_NOTE, "Note"),
         _paragraph("Summary", "Heading1"),
     ]

@@ -42,6 +42,8 @@ class ExportSnapshot:
     declined: tuple[str, ...]
     turns: tuple[Turn, ...]
     confirmed_revision: int | None = None
+    # False for an unfinished draft saved to carry on later (some required answers missing).
+    complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,8 @@ class AppendixInput:
     summary: Summary
     sections: tuple[AnswerSection, ...]
     turns: tuple[QATurn, ...]
+    app_name: str = "SCP AI Ideation assistant"  # from configuration; shown in the document title
+    draft: bool = False  # an unfinished canvas saved to carry on later
 
     @property
     def included_turns(self) -> int:
@@ -164,7 +168,9 @@ def _summary(sections: tuple[AnswerSection, ...], turns: tuple[QATurn, ...]) -> 
     return Summary(tuple(facts), key_answers)
 
 
-def build_input(snapshot: ExportSnapshot) -> AppendixInput:
+def build_input(
+    snapshot: ExportSnapshot, app_name: str = "SCP AI Ideation assistant"
+) -> AppendixInput:
     declined = frozenset(snapshot.declined)
     sections = tuple(
         AnswerSection(title, tuple(_answer(f, snapshot.canvas, declined) for f in fields))
@@ -176,7 +182,14 @@ def build_input(snapshot: ExportSnapshot) -> AppendixInput:
         QATurn(n, "user" if t.role == "user" else "assistant", clean_text(t.text))
         for n, t in enumerate(shown, start=1)
     )
-    return AppendixInput(snapshot.revision, _summary(sections, turns), sections, turns)
+    return AppendixInput(
+        snapshot.revision,
+        _summary(sections, turns),
+        sections,
+        turns,
+        app_name,
+        draft=not snapshot.complete,
+    )
 
 
 SPEAKER_LABELS = {"user": "User", "assistant": "Assistant"}
@@ -202,6 +215,10 @@ SUMMARY_NOTE = (
 OVERVIEW_LABEL = "Overview (written by AI from this conversation only)"
 OVERVIEW_NOTE = "Check it against Part B: where they differ, the conversation record is correct."
 OVERVIEW_UNAVAILABLE = "An AI-written overview could not be prepared for this download."
+DRAFT_NOTE = (
+    "UNFINISHED DRAFT: some required answers are still missing. To carry on, start a new session "
+    "and attach this file to your first answer."
+)
 SNAPSHOT_NOTE = "A snapshot of this revision: later changes to the conversation are not included."
 RECORD_NOTE = (
     "Every message in the order it was sent. Corrections stay in this record; Part A shows the "
