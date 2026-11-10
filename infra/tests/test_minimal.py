@@ -267,7 +267,7 @@ def test_sweeper_command_and_schedule_are_unchanged(m):
     _, c = container(m.service, "plan-test-sweeper")
     assert c["Command"] == ["python", "-m", "app.expiry"]
     sched = next(iter(resources(m.service, "AWS::Scheduler::Schedule").values()))["Properties"]
-    assert sched["ScheduleExpression"] == "rate(15 minutes)"
+    assert sched["ScheduleExpression"] == "rate(5 minutes)"
 
 
 # --- roles -------------------------------------------------------------------------------------

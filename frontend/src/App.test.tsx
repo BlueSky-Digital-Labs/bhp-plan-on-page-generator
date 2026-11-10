@@ -191,6 +191,32 @@ describe("protected route /start", () => {
     expect(window.location.hostname).not.toBe("evil.example");
   });
 
+  it("shows no idle warning with plenty of time, and an older server (no idle limit sent) shows none either", async () => {
+    mockApi({
+      "GET /api/csrf": csrfRoute,
+      "GET /api/session": () => json({ ...SESSION, idle_seconds_remaining: 900 }),
+      "GET /api/conversation": EMPTY_CONVERSATION,
+    });
+    at("/conversation");
+    render(<App />);
+    expect(await screen.findByLabelText("Describe your idea")).toBeInTheDocument();
+    expect(screen.queryByText(/about to end/)).not.toBeInTheDocument();
+  });
+
+  it("warns before the session ends for want of activity, then explains plainly on the entry page when it did", async () => {
+    mockApi({
+      "GET /api/access-state": NOT_PERMITTED,
+      "GET /api/csrf": csrfRoute,
+      "GET /api/session": () => json({ ...SESSION, idle_seconds_remaining: 2 }),
+      "GET /api/conversation": EMPTY_CONVERSATION,
+    });
+    at("/conversation");
+    render(<App />);
+    expect(await screen.findByText(/about to end/)).toBeInTheDocument();
+    await waitFor(() => expect(window.location.pathname).toBe("/"), { timeout: 4000 });
+    expect(await screen.findByText(/nothing happened for 15 minutes/)).toBeInTheDocument();
+  });
+
   it("returns to entry if access expires between the check and the click", async () => {
     mockApi({
       "GET /api/access-state": [PERMITTED, NOT_PERMITTED],

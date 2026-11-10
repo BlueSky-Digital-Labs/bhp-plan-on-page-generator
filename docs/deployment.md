@@ -24,7 +24,7 @@ idle timeout); **one** web task and the sweeper task, both in the public subnets
 the ECR repository; the same DynamoDB table (same keys, `expiry-index` and TTL: a test checks it
 against `backend/app/dynamo.py`); the two access secrets (in Parameter Store by default, see
 [Secrets backend](#secrets-backend-secrets-manager-or-parameter-store)); two log groups (7 days); the ECS cluster and
-service; the sweeper schedule (every 15 minutes); and the same four roles with the same
+service; the sweeper schedule (every 5 minutes); and the same four roles with the same
 least-privilege actions minus KMS. Every removal policy is still `DESTROY`.
 
 **What it skips, and what that costs you:**

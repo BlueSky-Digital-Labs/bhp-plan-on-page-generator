@@ -14,9 +14,10 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 from app.access import cookies
 from app.access.errors import AccessRejected, DependencyUnavailable
 from app.access.secrets import SecretProvider
-from app.access.store import Session, SessionStore
+from app.access.store import SESSION_IDLE, Session, SessionStore
 
 SESSION_LIFETIME = timedelta(hours=24)  # fixed at creation; activity never extends it
+# (SESSION_IDLE, in app.access.store: a session with no activity for that long ends sooner.)
 GRANT_LIFETIME = timedelta(minutes=10)
 MAX_CODE_LENGTH = 128  # bounds the work an unauthenticated request can cause
 
@@ -124,7 +125,20 @@ class AccessService:
             raise AccessRejected("unknown_session")
         if session.expires_at <= now:  # the record, not the cookie, is authoritative
             raise AccessRejected("expired_session")
+        if now - session.idle_since >= SESSION_IDLE:
+            self._store.delete(
+                session_id
+            )  # ended for good; its content goes with it (see the caller)
+            raise AccessRejected("idle_session", session_id)
         return session
+
+    def touch(self, session: Session) -> None:
+        """The user did something: the idle clock starts again. The 24 h limit is not extended."""
+        self._store.touch(session.session_id, self._clock())
+
+    @staticmethod
+    def idle_seconds_remaining(session: Session, now: datetime) -> int:
+        return max(0, int((session.idle_deadline() - now).total_seconds()))
 
     def end_session(self, session_id: str) -> None:
         self._store.delete(session_id)

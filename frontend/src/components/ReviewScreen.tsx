@@ -4,20 +4,11 @@ import { ApiError } from "../api/client";
 import { useSubmitByEmail } from "../hooks/useSubmitByEmail";
 import { type AppendixFormat, type CanvasFormat, downloadAppendix, downloadCanvas } from "../api/appendix";
 import { DownloadMenu } from "./DownloadMenu";
+import { APPENDIX_CHOICES, CANVAS_CHOICES } from "./downloadChoices";
 import { DownloadStatus } from "./DownloadStatus";
 import { ErrorNotice } from "./ErrorNotice";
 import { Loading } from "./Loading";
 import { OnePager } from "./OnePager";
-
-const CANVAS_CHOICES = [
-  { key: "pdf", label: "PDF" },
-  { key: "pptx", label: "PowerPoint (.pptx)" },
-];
-const APPENDIX_CHOICES = [
-  { key: "pdf", label: "PDF" },
-  { key: "docx", label: "Word (.docx)" },
-  { key: "json", label: "JSON" },
-];
 
 // Fixed copy keyed on the error code: nothing from the response is shown.
 const CHANGED = "The canvas changed since it was shown. Please read it again before confirming.";

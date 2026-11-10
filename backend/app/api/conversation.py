@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.access.store import Session
-from app.api.access import current_session, require_csrf
+from app.api.access import active_session, current_session, require_csrf
 from app.conversation.service import ConversationService, turn_json
 from app.errors import ApiProblem
 
@@ -59,7 +59,7 @@ def read_conversation(
 def submit_turn(
     body: SubmitBody,
     response: Response,
-    session: Annotated[Session, Depends(current_session)],
+    session: Annotated[Session, Depends(active_session)],
     service: Annotated[ConversationService, Depends(get_conversation)],
 ) -> dict:
     result = service.submit(session, body.submission_id, body.text, body.expected_revision)
@@ -83,7 +83,7 @@ def submit_turn(
 @router.get("/conversation/turns/{turn_id}/stream")
 def stream_turn(
     turn_id: str,
-    session: Annotated[Session, Depends(current_session)],
+    session: Annotated[Session, Depends(active_session)],
     service: Annotated[ConversationService, Depends(get_conversation)],
 ) -> StreamingResponse:
     # Unknown, malformed and other-session ids all look identical: nothing reveals ownership.

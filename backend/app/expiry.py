@@ -1,10 +1,11 @@
-"""Scheduled expiry: delete every session older than 24 hours, whether or not the user came back.
+"""Scheduled expiry: delete every session past its end (15 idle minutes or 24 hours), whether or
+not the user came back.
 
 A command, not a web route: `python -m app.expiry` runs one sweep and exits (0 if every expired
 session was removed, 1 otherwise, so a scheduled task that failed shows up as a failed task). Run
-it every 15 minutes. A session becomes deletable the moment it is strictly more than 24 hours old
-and is physically removed by the next sweep, so up to about 24 h 15 min after it began. The
-DynamoDB TTL is only a backstop. See docs/expiry.md.
+it every 5 minutes. A session becomes deletable the moment it is strictly past its idle deadline or
+its 24 hour end, and is physically removed by the next sweep. The DynamoDB TTL is only a backstop.
+See docs/expiry.md.
 
 It bypasses the download gate on purpose (the user may never have returned), uses the same
 deletion as sign-out and purge, finds sessions from the content store's own id-and-expiry list

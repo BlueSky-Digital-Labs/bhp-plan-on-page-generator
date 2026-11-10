@@ -10,7 +10,7 @@ export const ROUTES = {
   canvas: "/canvas", // the original template form, kept reachable but not linked
 } as const;
 
-export type Notice = "access_required" | "session_deleted" | "session_stopped";
+export type Notice = "access_required" | "session_deleted" | "session_stopped" | "session_idle";
 export type NavigateOptions = { replace?: boolean; notice?: Notice };
 
 export function navigate(to: string, { replace = false, notice }: NavigateOptions = {}) {
@@ -43,7 +43,8 @@ export function readNotice(): Notice | null {
   const state = window.history.state as { notice?: unknown } | null;
   return state?.notice === "access_required" ||
     state?.notice === "session_deleted" ||
-    state?.notice === "session_stopped"
+    state?.notice === "session_stopped" ||
+    state?.notice === "session_idle"
     ? state.notice
     : null;
 }

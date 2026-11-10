@@ -67,8 +67,9 @@ export function StartScreen({
             away.
           </li>
           <li>
-            Whether or not you do, everything is deleted automatically 24 hours after you start,
-            even if you close the browser. An abandoned session cannot be recovered.
+            Whether or not you do, everything is deleted automatically if nothing happens for 15 minutes, and in
+            any case 24 hours after you start, even if you close the browser. A session that has ended cannot be
+            recovered, so download what you need to keep.
           </li>
         </ul>
         <p className="start__note">

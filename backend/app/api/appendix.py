@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Response
 
 from app.access.store import Session
-from app.api.access import current_session
+from app.api.access import active_session
 from app.api.conversation import get_conversation
 from app.api.exports import (
     appendix_bytes,
@@ -25,7 +25,7 @@ logger = logging.getLogger("app.appendix")
 
 @router.get("/appendix")
 def download_appendix(
-    session: Annotated[Session, Depends(current_session)],
+    session: Annotated[Session, Depends(active_session)],
     service: Annotated[ConversationService, Depends(get_conversation)],
     file_format: Annotated[Format, Query(alias="format")],
     revision: Annotated[int, Query(ge=0)],

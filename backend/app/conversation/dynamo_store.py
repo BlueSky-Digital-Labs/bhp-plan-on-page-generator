@@ -15,7 +15,7 @@ from typing import Any
 from botocore.exceptions import ClientError
 
 from app.access.errors import DependencyUnavailable
-from app.conversation.store import MAX_TURNS, SubmitResult, Turn, _new_id
+from app.conversation.store import MAX_TURNS, SubmitResult, Turn, _new_id, answered_context
 from app.dynamo import (
     EXPIRY_INDEX,
     INDEX_PK,
@@ -225,12 +225,7 @@ class DynamoConversationStore:
 
     def context_for(self, session_id: str, turn_id: str) -> tuple[str, str, tuple[str, ...]]:
         """(answered user turn id, its text, all user turn ids) for an assistant turn."""
-        turns = [turn for _, turn in self._turns(session_id)]
-        user_ids = tuple(t.turn_id for t in turns if t.role == "user")
-        for i, t in enumerate(turns):
-            if t.turn_id == turn_id and i > 0:
-                return turns[i - 1].turn_id, turns[i - 1].text, user_ids
-        return "", "", user_ids
+        return answered_context([turn for _, turn in self._turns(session_id)], turn_id)
 
     def complete_turn(self, session_id: str, turn_id: str, text: str) -> tuple[Turn | None, bool]:
         """Commit the assistant's reply. Set-once; the flag says whether this call did it."""
@@ -298,6 +293,23 @@ class DynamoConversationStore:
                 return  # it completed meanwhile: leave it
             raise
 
+    def touch(self, session_id: str, expires_at: datetime) -> None:
+        """Move the content's expiry (the idle deadline), which is what the sweep looks at. Only for
+        content that exists; the other items keep their 24 h expiry and go with the session."""
+        try:
+            with guarded(expect=("ConditionalCheckFailedException",)):
+                self._client.update_item(
+                    TableName=self._table,
+                    Key={PK: S(session_id), SK: S(_CONV)},
+                    UpdateExpression="SET #e = :e",
+                    ConditionExpression="attribute_exists(#p) AND attribute_not_exists(purging)",
+                    ExpressionAttributeNames={"#e": TTL_ATTRIBUTE, "#p": PK},
+                    ExpressionAttributeValues={":e": N(epoch(expires_at))},
+                )
+        except ClientError as exc:
+            if not condition_failed(exc):
+                raise
+
     # --- deleting --------------------------------------------------------------------------------
 
     def delete_session(self, session_id: str) -> None:
@@ -335,7 +347,8 @@ class DynamoConversationStore:
     def expired_session_ids(
         self, now: datetime, limit: int, after: str | None = None
     ) -> tuple[list[str], str | None]:
-        """One page of sessions past their fixed 24 h life (strictly before `now`).
+        """One page of sessions past their end (strictly before `now`): 24 h after they began, or
+        the idle limit after their last activity, whichever came first.
 
         Read from the sparse expiry index: ids and times only, never content. `after` is the opaque
         token from the previous page.

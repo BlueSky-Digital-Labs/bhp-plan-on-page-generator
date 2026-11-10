@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.access.store import Session
-from app.api.access import current_session, require_csrf
+from app.api.access import active_session, require_csrf
 from app.api.conversation import get_conversation
 from app.api.exports import (
     attachment,
@@ -54,7 +54,7 @@ class ConfirmBody(BaseModel):
 @router.post("/canvas/confirm", dependencies=[Depends(require_csrf)])
 def confirm_canvas(
     body: ConfirmBody,
-    session: Annotated[Session, Depends(current_session)],
+    session: Annotated[Session, Depends(active_session)],
     service: Annotated[ConversationService, Depends(get_conversation)],
 ) -> dict:
     """The user confirms the revision they read back. Returns the refreshed review."""
@@ -68,7 +68,7 @@ def confirm_canvas(
 
 @router.get("/canvas-file")
 def download_canvas(
-    session: Annotated[Session, Depends(current_session)],
+    session: Annotated[Session, Depends(active_session)],
     service: Annotated[ConversationService, Depends(get_conversation)],
     file_format: Annotated[Literal["pdf", "pptx"], Query(alias="format")],
     revision: Annotated[int, Query(ge=0)],

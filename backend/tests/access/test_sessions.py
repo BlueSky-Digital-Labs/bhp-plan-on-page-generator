@@ -67,19 +67,28 @@ def test_session_requires_authentication(world):
     assert anonymous.delete("/api/session", headers=csrf(anonymous)).status_code == 401
 
 
+def _stay(client):
+    """The user does something (the page's "keep my session" button): the idle clock restarts."""
+    return client.post("/api/session/keepalive", headers=csrf(client))
+
+
 def test_session_records_a_fixed_24_hour_expiry_not_extended_by_activity(world):
     client = signed_in(world)
     record = world.store.sessions[_sid(client)]
     assert record.expires_at - record.created_at == timedelta(hours=24)
     first = client.get("/api/session").json()
 
-    world.clock.advance(hours=12)
-    for _ in range(3):
-        assert client.get("/api/session").status_code == 200  # activity
-    assert client.get("/api/session").json() == first  # unchanged
-    assert world.store.sessions[_sid(client)].expires_at == record.expires_at
+    for _ in range(12 * 6):  # twelve hours of activity every ten minutes
+        world.clock.advance(minutes=10)
+        assert _stay(client).status_code == 200
+    now = client.get("/api/session").json()
+    assert (now["created_at"], now["expires_at"]) == (first["created_at"], first["expires_at"])
+    assert world.store.sessions[_sid(client)].expires_at == record.expires_at  # never extended
 
-    world.clock.advance(hours=12, seconds=1)
+    for _ in range(12 * 6 - 1):
+        world.clock.advance(minutes=10)
+        assert _stay(client).status_code == 200
+    world.clock.advance(minutes=10, seconds=1)  # past the fixed 24 hours, however active it was
     assert client.get("/api/session").status_code == 401
 
 

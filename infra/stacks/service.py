@@ -31,7 +31,7 @@ from config import Config
 from stacks.foundation import EXPIRY_INDEX, FoundationStack
 
 APP_PORT = 8000
-SWEEPER_SCHEDULE = "rate(15 minutes)"
+SWEEPER_SCHEDULE = "rate(5 minutes)"
 SWEEPER_COMMAND = ["python", "-m", "app.expiry"]
 WEB_ACTIONS_DDB = [
     "dynamodb:GetItem",

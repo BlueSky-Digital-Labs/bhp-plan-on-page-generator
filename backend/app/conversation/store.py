@@ -43,6 +43,20 @@ class _Conversation:
     submissions: dict[str, tuple[str, str]] = field(default_factory=dict)  # id -> (user, assistant)
 
 
+def answered_context(turns: list[Turn], turn_id: str) -> tuple[str, str, tuple[str, ...]]:
+    """(answered user turn id, its text, all user turn ids) for an assistant turn.
+
+    The one place this pairing is worked out, so every store gives the same answer: an assistant
+    turn answers the turn just before it, and a turn that is not found (or is first) answers
+    nothing.
+    """
+    user_ids = tuple(t.turn_id for t in turns if t.role == "user")
+    for i, t in enumerate(turns):
+        if t.turn_id == turn_id and i > 0:
+            return turns[i - 1].turn_id, turns[i - 1].text, user_ids
+    return "", "", user_ids
+
+
 def _new_id() -> str:
     return uuid.uuid4().hex
 
@@ -104,12 +118,7 @@ class InMemoryConversationStore:
         """(answered user turn id, its text, all user turn ids) for an assistant turn."""
         with self._lock:
             conv = self._conversations.get(session_id)
-            turns = conv.turns if conv else []
-            user_ids = tuple(t.turn_id for t in turns if t.role == "user")
-            for i, t in enumerate(turns):
-                if t.turn_id == turn_id and i > 0:
-                    return turns[i - 1].turn_id, turns[i - 1].text, user_ids
-            return "", "", user_ids
+            return answered_context(list(conv.turns) if conv else [], turn_id)
 
     def _replace(self, session_id: str, turn: Turn, **changes) -> Turn:
         conv = self._conversations[session_id]
@@ -131,6 +140,13 @@ class InMemoryConversationStore:
             turn = self._find(session_id, turn_id)
             if turn is not None and turn.status != "complete":
                 self._replace(session_id, turn, text="", status=status)
+
+    def touch(self, session_id: str, expires_at: datetime) -> None:
+        """Move the content's expiry (the idle deadline). Only for content that exists."""
+        with self._lock:
+            conv = self._conversations.get(session_id)
+            if conv is not None:
+                conv.expires_at = expires_at
 
     def delete_session(self, session_id: str) -> None:
         with self._lock:
@@ -171,6 +187,7 @@ class UnavailableConversationStore:
         raise DependencyUnavailable("conversation_store_unavailable")
 
     history = submit = get_turn = context_for = complete_turn = mark = _fail
+    touch = lambda self, *_, **__: None  # noqa: E731 - nothing is stored, so nothing can idle
     delete_session_if_revision = expired_session_ids = _fail
 
     def delete_session(self, session_id: str) -> None:  # nothing is stored, nothing to delete

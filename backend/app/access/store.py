@@ -11,13 +11,17 @@ with a session id (those are URL-safe base64 and contain no '#').
 """
 
 import threading
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.access.errors import DependencyUnavailable
+
+# A session with no activity for this long ends and its data is deleted. Separately, it ends 24
+# hours after it began whatever happens (`expires_at`).
+SESSION_IDLE = timedelta(minutes=15)
 
 _GRANT_PREFIX = "grant#"
 _ACCESS, _GRANT = "ACCESS", "GRANT"  # the sort key of each kind of record
@@ -28,6 +32,15 @@ class Session:
     session_id: str
     created_at: datetime  # UTC
     expires_at: datetime  # UTC, fixed at creation
+    last_active_at: datetime | None = None  # UTC; None means "at creation"
+
+    @property
+    def idle_since(self) -> datetime:
+        return self.last_active_at or self.created_at
+
+    def idle_deadline(self) -> datetime:
+        """When the session ends for want of activity (never later than its fixed 24 h end)."""
+        return min(self.expires_at, self.idle_since + SESSION_IDLE)
 
 
 class SessionStore(Protocol):
@@ -36,6 +49,10 @@ class SessionStore(Protocol):
     def get(self, session_id: str) -> Session | None: ...
 
     def delete(self, session_id: str) -> None: ...
+
+    def touch(self, session_id: str, now: datetime) -> None:
+        """Record activity. Never revives a session that is already gone."""
+        ...
 
     def claim_grant(self, grant_id: str, expires_at: datetime, now: datetime) -> bool:
         """Atomically mark a grant used. False if it was already claimed.
@@ -75,6 +92,12 @@ class InMemorySessionStore:
     def delete(self, session_id: str) -> None:
         with self._lock:
             self.sessions.pop(session_id, None)
+
+    def touch(self, session_id: str, now: datetime) -> None:
+        with self._lock:
+            current = self.sessions.get(session_id)
+            if current is not None:
+                self.sessions[session_id] = replace(current, last_active_at=now)
 
     def claim_grant(self, grant_id: str, expires_at: datetime, now: datetime) -> bool:
         with self._lock:
@@ -133,6 +156,11 @@ class DynamoSessionStore:
                 session_id=item["session_id"]["S"],
                 created_at=datetime.fromisoformat(item["created_at"]["S"]).replace(tzinfo=UTC),
                 expires_at=datetime.fromtimestamp(int(item["expires_at"]["N"]), UTC),
+                last_active_at=(
+                    datetime.fromtimestamp(int(item["last_active_at"]["N"]), UTC)
+                    if "last_active_at" in item
+                    else None
+                ),
             )
         except (KeyError, ValueError):
             raise DependencyUnavailable("store_record_invalid") from None
@@ -143,6 +171,22 @@ class DynamoSessionStore:
                 TableName=self._table, Key={"session_id": {"S": session_id}, "sk": {"S": _ACCESS}}
             )
         except (ClientError, BotoCoreError):
+            raise DependencyUnavailable("store") from None
+
+    def touch(self, session_id: str, now: datetime) -> None:
+        try:
+            self._client.update_item(
+                TableName=self._table,
+                Key={"session_id": {"S": session_id}, "sk": {"S": _ACCESS}},
+                UpdateExpression="SET last_active_at = :now",
+                ConditionExpression="attribute_exists(session_id)",
+                ExpressionAttributeValues={":now": {"N": str(int(now.timestamp()))}},
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                return  # it ended meanwhile: do not bring it back
+            raise DependencyUnavailable("store") from None
+        except BotoCoreError:
             raise DependencyUnavailable("store") from None
 
     def claim_grant(self, grant_id: str, expires_at: datetime, now: datetime) -> bool:

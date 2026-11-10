@@ -36,7 +36,9 @@ React/JSON contract requires; the SPA decides where to navigate.
 * **No client-chosen identity.** Session ids are server-generated (256-bit random). Nothing
   in a query string, header or body can select another session; endpoints only ever act on
   the session in the caller's own signed cookie.
-* **Fixed 24 h expiry**, set at creation and never extended by activity. Starting another
+* **Fixed 24 h expiry**, set at creation and never extended by activity, and a **15 minute idle
+  limit**: with no activity of the user's own for 15 minutes the session ends and its data is deleted
+  ([expiry.md](expiry.md)). Starting another
   canvas (with a fresh grant, or from an existing session) creates a new independent record and
   never touches existing records, which keep their original expiry. A grant that is presented
   but already used is rejected, never silently replaced by the session.

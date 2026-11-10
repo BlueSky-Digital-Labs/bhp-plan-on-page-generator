@@ -56,7 +56,8 @@ count "$CANARY_C"          # expect 1 or more (still within 24 hours)
 
 ## 4. Let C expire, then sweep
 
-A session is deletable once it is more than 24 hours old. After that, wait for the 15 minute
+A session is deletable once it is more than 24 hours old, or has had no activity for 15 minutes.
+After that, wait for the 5 minute
 schedule or run the sweeper once by hand:
 
 ```bash

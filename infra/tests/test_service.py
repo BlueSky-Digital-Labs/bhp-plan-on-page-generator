@@ -420,7 +420,7 @@ def test_sweeper_task_and_schedule(test_env):
     assert "PortMappings" not in c
     t.resource_count_is("AWS::Scheduler::Schedule", 1)
     sched = next(iter(resources(t, "AWS::Scheduler::Schedule").values()))["Properties"]
-    assert sched["ScheduleExpression"] == "rate(15 minutes)"
+    assert sched["ScheduleExpression"] == "rate(5 minutes)"
     assert sched["FlexibleTimeWindow"] == {"Mode": "OFF"}
     target = sched["Target"]
     ecs = target["EcsParameters"]

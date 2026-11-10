@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.access.store import Session
-from app.api.access import current_session, require_csrf
+from app.api.access import active_session, require_csrf
 from app.api.conversation import get_conversation
 from app.api.exports import (
     appendix_bytes,
@@ -61,7 +61,7 @@ class EmailBody(BaseModel):
 @router.post("/email", dependencies=[Depends(require_csrf)])
 def send_email(
     body: EmailBody,
-    session: Annotated[Session, Depends(current_session)],
+    session: Annotated[Session, Depends(active_session)],
     service: Annotated[ConversationService, Depends(get_conversation)],
     mail: Annotated[MailService, Depends(get_mail)],
     settings: Annotated[Settings, Depends(get_settings)],

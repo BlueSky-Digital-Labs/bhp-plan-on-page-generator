@@ -93,6 +93,9 @@ button:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
   width: 100%; font: inherit; min-height: 2.75rem; padding: 0.6rem 0.75rem; border: 1px solid #b9b1a9; border-radius: 0.5rem; background: #fff;
 }
 .field input[type="password"]:focus-visible { outline: 3px solid var(--fg); outline-offset: 1px; }
+.idle-warning { margin: 0 0 1rem; padding: 0.75rem 1rem; border-radius: 0.75rem; background: #fff6e5; color: #5c3b00; border-left: 4px solid #b26a00; }
+.idle-warning p { margin: 0; }
+.idle-warning__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.5rem !important; font-weight: 600; }
 .session-bar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; color: var(--muted); font-size: 0.875rem; }
 .button--secondary { background: #fff; color: var(--accent); }
 .button--secondary:hover:not(:disabled) { background: var(--brand-tint); color: var(--accent-hover); border-color: var(--accent-hover); }
@@ -249,7 +252,7 @@ body:has(.entry) { background: radial-gradient(60rem 28rem at 50% 3rem, var(--br
 @page { size: A4 landscape; margin: 6mm; }
 
 @media print {
-  .layout__header, .layout__footer, .session-bar, .review-actions, .readback, .mail, .dl { display: none !important; }
+  .layout__header, .layout__footer, .session-bar, .idle-warning, .review-actions, .readback, .mail, .dl { display: none !important; }
   .layout { min-height: 0 !important; display: block !important; }  /* 100vh could add a 2nd page */
   html, body { background: #1e1e1e; margin: 0; }
   .layout__main { padding: 0 !important; max-width: none !important; }

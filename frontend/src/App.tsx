@@ -7,6 +7,7 @@ import { ReviewScreen } from "./components/ReviewScreen";
 import { ErrorNotice } from "./components/ErrorNotice";
 import { Layout } from "./components/Layout";
 import { Loading } from "./components/Loading";
+import { IdleWatch } from "./components/IdleWatch";
 import { StartScreen } from "./components/StartScreen";
 import { useAccess } from "./hooks/useAccess";
 import { BrandingProvider, useBranding } from "./hooks/useBranding";
@@ -73,6 +74,12 @@ function EntryRoute() {
             Your session was deleted. Nothing from it is kept. Enter the access code to start a new one.
           </p>
         )}
+        {readNotice() === "session_idle" && (
+          <p role="status" className="notice">
+            Your session ended because nothing happened for 15 minutes, and everything on the server was deleted. Enter the
+            access code to start a new one.
+          </p>
+        )}
         {readNotice() === "session_stopped" && (
           <p role="status" className="notice">
             Your session was stopped and everything on the server was deleted. To carry on, enter the access code, start a
@@ -124,6 +131,12 @@ function SessionPage({ children }: { children: (onAccessLost: () => void) => Rea
           Sign out
         </button>
       </div>
+      {typeof state.session.idle_seconds_remaining === "number" && (
+        <IdleWatch
+          remaining={state.session.idle_seconds_remaining}
+          onEnded={() => navigate(ROUTES.entry, { replace: true, notice: "session_idle" })}
+        />
+      )}
       {children(lost)}
     </>
   );

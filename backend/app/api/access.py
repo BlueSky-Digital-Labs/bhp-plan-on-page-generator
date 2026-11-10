@@ -7,6 +7,7 @@ with the React/JSON foundation contract.
 import hmac
 import logging
 import secrets
+from dataclasses import replace
 from typing import Annotated
 from urllib.parse import urlparse
 
@@ -83,7 +84,28 @@ def current_session(
         return service.load_session(request.cookies.get(SESSION_COOKIE))
     except AccessRejected as exc:
         _log(request, "session_rejected", exc.reason)
+        if exc.session_id is not None:  # it ended for want of activity: its data goes now
+            try:
+                request.app.state.conversation.delete_session(exc.session_id)
+            except Exception as failure:  # noqa: BLE001 - the scheduled sweep finishes the job
+                logger.error("idle_delete_failed", extra={"exception_type": type(failure).__name__})
         raise _unauthenticated() from None
+
+
+def active_session(
+    request: Request,
+    service: Annotated[AccessService, Depends(get_service)],
+    session: Annotated[Session, Depends(current_session)],
+) -> Session:
+    """`current_session`, and the user is known to be doing something, so the idle clock restarts.
+
+    Used by the requests that are the user's own actions (an answer, a download, the email, staying
+    signed in). Reading the page and the background checks use `current_session` and do not count,
+    so an open tab alone never keeps a session alive.
+    """
+    service.touch(session)
+    request.app.state.conversation.touch(session)
+    return session
 
 
 @router.get("/access-state")
@@ -146,13 +168,31 @@ def create_session(
     }
 
 
-@router.get("/session")
-def read_own_session(session: Annotated[Session, Depends(current_session)]) -> dict[str, str]:
+def _session_view(session: Session, service: AccessService) -> dict[str, str | int]:
     # Always the caller's own record: nothing in the request can select another session.
     return {
         "created_at": session.created_at.isoformat(),
         "expires_at": session.expires_at.isoformat(),
+        # How long until it ends for want of activity (so the page can warn before it happens).
+        "idle_seconds_remaining": service.idle_seconds_remaining(session, service.now()),
     }
+
+
+@router.get("/session")
+def read_own_session(
+    session: Annotated[Session, Depends(current_session)],
+    service: Annotated[AccessService, Depends(get_service)],
+) -> dict[str, str | int]:
+    return _session_view(session, service)
+
+
+@router.post("/session/keepalive", dependencies=[Depends(require_csrf)])
+def keep_session(
+    session: Annotated[Session, Depends(active_session)],
+    service: Annotated[AccessService, Depends(get_service)],
+) -> dict[str, str | int]:
+    """The user chose to stay: the idle clock restarts (the 24 h limit does not move)."""
+    return _session_view(replace(session, last_active_at=service.now()), service)
 
 
 def _session_ended(request: Request, event: str) -> Response:

@@ -2,17 +2,8 @@ import { useCallback, useState } from "react";
 import { type AppendixFormat, type CanvasFormat, downloadAppendix, downloadCanvas } from "../api/appendix";
 import { ApiError } from "../api/client";
 import { DownloadMenu } from "./DownloadMenu";
+import { APPENDIX_CHOICES, CANVAS_CHOICES } from "./downloadChoices";
 import { DownloadStatus } from "./DownloadStatus";
-
-const CANVAS_CHOICES = [
-  { key: "pdf", label: "PDF" },
-  { key: "pptx", label: "PowerPoint (.pptx)" },
-];
-const APPENDIX_CHOICES = [
-  { key: "pdf", label: "PDF" },
-  { key: "docx", label: "Word (.docx)" },
-  { key: "json", label: "JSON" },
-];
 
 // Fixed copy keyed on the error code: nothing from the response is shown.
 const MESSAGES: Record<string, string> = {

@@ -3,6 +3,9 @@ import { apiRequest } from "./client";
 export interface SessionInfo {
   created_at: string;
   expires_at: string;
+  // Seconds until the session ends for want of activity (15 minutes after the last thing the user
+  // did). Absent from an older server, in which case there is no idle limit to show.
+  idle_seconds_remaining?: number;
 }
 
 // The session cookie is HttpOnly: the browser holds it, page JavaScript never sees it.
@@ -29,6 +32,11 @@ export interface StartedSession extends SessionInfo {
 
 export function startSession(): Promise<StartedSession> {
   return apiRequest<StartedSession>("/api/sessions", { method: "POST", csrf: true });
+}
+
+// "Keep my session": counts as activity, so the idle clock starts again.
+export function keepSession(): Promise<SessionInfo> {
+  return apiRequest<SessionInfo>("/api/session/keepalive", { method: "POST", csrf: true });
 }
 
 export function endSession(): Promise<void> {

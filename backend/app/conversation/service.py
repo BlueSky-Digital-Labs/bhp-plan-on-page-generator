@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
-from app.access.store import Session
+from app.access.store import SESSION_IDLE, Session
 from app.appendix.model import AppendixError, ExportSnapshot
 from app.conversation.producers import ProducerUnavailable, TurnContext, TurnProducer
 from app.conversation.store import SubmitResult, Turn
@@ -107,6 +107,11 @@ class ConversationService:
             ),
         }
 
+    def touch(self, session: Session) -> None:
+        """Activity: the content now expires an idle limit from now (never later than the session's
+        fixed end). This is the date the scheduled sweep deletes by."""
+        self._store.touch(session.session_id, min(session.expires_at, self._clock() + SESSION_IDLE))
+
     def submit(
         self, session: Session, submission_id: str, text: str, expected_revision: int
     ) -> SubmitResult:
@@ -115,7 +120,7 @@ class ConversationService:
             confirmed = self._interview.confirmed_revision(session.session_id)
             if confirmed is not None and confirmed == self._store.history(session.session_id)[0]:
                 return SubmitResult("confirmed", confirmed)
-        return self._store.submit(
+        result = self._store.submit(
             session.session_id,
             submission_id,
             text,
@@ -123,6 +128,9 @@ class ConversationService:
             session.expires_at,
             self._clock(),
         )
+        if result.outcome == "created":
+            self.touch(session)  # the first answer creates the content: start its idle clock
+        return result
 
     def export_snapshot(self, session: Session, allow_incomplete: bool = False) -> ExportSnapshot:
         """One consistent copy of the conversation and draft.
