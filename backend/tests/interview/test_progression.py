@@ -274,8 +274,11 @@ def test_asking_again_because_the_answer_was_unclear_still_offers_the_choices():
     assert ask("opportunityTypes", "clarify")["choices"]["multiple"] is True
 
 
-def test_a_choice_between_an_earlier_and_a_new_value_is_typed_not_picked_from_the_list():
-    assert ask("priority", "clarify", conflicts={"priority": "Exploratory"})["choices"] is None
+def test_a_contradiction_about_a_part_with_a_list_shows_that_list_again():
+    options = ask("priority", "clarify", conflicts={"priority": "Exploratory"})["choices"][
+        "options"
+    ]
+    assert options == ["Must-have", "Nice-to-have", "Exploratory"]
 
 
 @pytest.mark.parametrize(

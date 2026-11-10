@@ -81,16 +81,19 @@ remember a field or an option (`amend.py`, deterministic, no model involved in c
 * **They name no part, or several, or it is unclear** ("can you fix something?"): the assistant asks
   "Which part would you like to change?" with all 16 parts as a selection (a small scrolling list), or
   they can type it in their own words. Picking one goes to the step above.
-* **The new answer replaces the old one** (no "which one should I keep?" question: asking to change it
+* **The new answer replaces the old one** (no confirmation question: asking to change it
   is the consent). A priority must still be one of the three; opportunity types are replaced, not
   added to. Nothing else changes.
 * **"No", "never mind", "cancel" or a thank-you** leaves the canvas as it was and returns to ready; so
   do two replies in a row that cannot be understood. "No, I meant the team" switches to the team.
 * While this is open the phase is `changing` ("Changing an answer") and the canvas is not ready, so
   **Generate canvas** is hidden until it is settled.
-* A message that already states a new value for an answered field ("Change the team to Finance") is
-  still handled by the contradiction rule below (it asks which to keep). The priority can be changed
-  that way only when the user's own words say "priority" and name the new one.
+* **A message that already gives the new value** ("Change the team to Finance", "Update the priority
+  to Nice-to-have") is applied at once, with "Done, I've updated Team." and no question: after
+  "that's everything" it is a request, not a contradiction. "Also add …" / "plus …" adds to what is
+  there (text fields and opportunity types); anything else replaces it. The priority is always
+  replaced, and only when the user's own words say "priority" and name the new one. (In the
+  middle of the interview a different answer to an answered field is still asked about, below.)
 
 Once the user confirms the canvas ("Yes, this is correct"), it is **final**: the server refuses
 further answers (`409 canvas_confirmed`), the review page has no way back to the conversation, and
@@ -104,8 +107,14 @@ further answers (`409 canvas_confirmed`), the review page has no way back to the
 * **Priority is only ever the user's explicit choice**: accepted only while the question being
   answered is the priority question *and* the user's message names that priority.
 * Every fact must cite a real user turn id.
-* A different answer to an already-answered field is not applied: the interviewer asks which to
-  keep (`Earlier you said “…”, but now I heard “…”. Which one should I use?`).
+* A different answer to an already-answered field (in the middle of the interview) is not applied
+  at once: the interviewer confirms it (`You said “…” earlier. Do you want to update it to “…”?`),
+  offered as a **Yes, update it / No, keep my earlier answer** selection. "Yes" (or "sure", "ok")
+  updates it, "No" keeps the earlier answer, and typing either value works too. Anything else
+  asks once more, then the earlier answer is kept and the user is told. For a part with a fixed
+  list (priority, opportunity type) the question is `You chose “…” earlier. Do you want to change it
+  to “…”? Or pick the one you want below.` and **the list is shown again**: picking any option is the
+  answer (the earlier one keeps it, another changes it), and "yes" still means the new one.
 * "I don't know" / "skip" is read deterministically from short replies. For a required field it
   is recorded as uncertainty (never satisfies the validator), the question is rephrased once, then
   the field is revisited after the others. Optional fields are marked declined and never block.

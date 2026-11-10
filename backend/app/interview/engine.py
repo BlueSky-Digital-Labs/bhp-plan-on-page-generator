@@ -37,6 +37,7 @@ from app.interview.prompts import (
     AMEND_PICK,
     AMEND_PICK_AGAIN,
     AMEND_REPLIES,
+    CONFLICT_CHOICES,
     READY_TEXT,
     TIPS,
     acknowledgement,
@@ -131,6 +132,10 @@ _AFFIRM = re.compile(
     r"^(yes|yep|yeah|correct|right|that'?s (right|all|it)|that is (right|all|it)|all good|"
     r"nothing else|no,? that'?s all|looks good|confirmed?)\b"
 )
+_YES = re.compile(
+    r"^(yes|yep|yeah|yup|sure|ok|okay|please|update|do it|go ahead|correct|that'?s right|confirm)\b"
+)
+_NO = re.compile(r"^(no|nope|nah|don'?t|do not|leave it|not)\b")
 _KEEP_EARLIER = re.compile(r"\b(first|earlier|original|old|before|keep)\b")
 _TAKE_NEW = re.compile(r"\b(second|new|latest|now|latter|change)\b")
 _OVERRIDE = re.compile(
@@ -138,6 +143,7 @@ _OVERRIDE = re.compile(
     r"disregard (your|the|all)|forget (your|all|the) (instructions|rules)|you are now|"
     r"act as|pretend (to be|you)|system prompt|reveal your|new instructions)\b"
 )
+_ADD_WORDS = re.compile(r"\b(add|also|plus|as well|too|include|in addition|another)\b")
 _SHORT = 60  # only brief replies are read as "unsure" or "declined"; long ones carry content
 
 
@@ -208,6 +214,10 @@ def choices_for(target: Target, s: InterviewState) -> dict[str, Any] | None:
     if target.kind == "pick":  # which part to change: every part, by name
         return {"multiple": False, "options": list(PICK_OPTIONS)}
     spec = CHOICE_FIELDS.get(target.field)
+    if target.kind == "clarify" and target.field in s.conflicts:
+        if spec is not None:  # a part with a list: show the list again, whichever the user wants
+            return {"multiple": spec[1], "options": list(spec[0])}
+        return {"multiple": False, "options": list(CONFLICT_CHOICES)}  # otherwise: update or keep
     if spec is None:
         return None
     if target.kind in ("missing", "revise") or (
@@ -303,7 +313,10 @@ class Interviewer:
             extraction = self._extractor.extract(
                 ExtractionInput(user_text, user_turn_id, user_turn_ids, target, s.canvas, override)
             )
-            captured = self._apply(s, extraction, target, user_text, user_turn_ids, amending)
+            changed: list[str] = []  # answered fields the user asked to change after "that's all"
+            captured = self._apply(
+                s, extraction, target, user_text, user_turn_ids, amending, changed
+            )
             if override:
                 cue = "override"
             elif s.conflicts:
@@ -318,7 +331,9 @@ class Interviewer:
                 elif target is not None:
                     s.attempts[target.field] = s.attempts.get(target.field, 0) + 1
                 cue = "nothing"
-            return self._finish(s, cue, extraction.next_question, len(user_turn_ids), amending)
+            return self._finish(
+                s, cue, extraction.next_question, len(user_turn_ids), amending, tuple(changed)
+            )
 
         return self._finish(s, cue, None, len(user_turn_ids), amending)
 
@@ -432,6 +447,7 @@ class Interviewer:
         user_text: str,
         user_turn_ids: tuple[str, ...],
         amending: bool = False,
+        changed: list[str] | None = None,
     ) -> bool:
         captured = False
         for update in extraction.field_updates:
@@ -449,8 +465,37 @@ class Interviewer:
                 amending,
             ):
                 continue  # priority is only ever the user's explicit choice
+            if amending and target is None and s.canvas.get(update.field):
+                # Back at a finished canvas and saying something new about an answered part: that
+                # is a request to change it, so it is changed (no "which one should I keep?").
+                if self._amend_set(s, update.field, value, typed_part(user_text)):
+                    captured = True
+                    if changed is not None:
+                        changed.append(update.field)
+                continue
             captured |= self._set(s, update.field, value, target)
         return captured
+
+    @staticmethod
+    def _amend_set(s: InterviewState, fld: str, value: Any, typed: str) -> bool:
+        """Change an answered part at the user's request. "Add the X" / "also Y" adds to what is
+        there; anything else replaces it. The priority is one choice, so it is always replaced.
+        False if nothing would change."""
+        existing = s.canvas[fld]
+        adding = bool(_ADD_WORDS.search(typed.casefold()))
+        new: Any
+        if fld == "priority":
+            new = value
+        elif fld == "opportunityTypes":
+            new = list(existing) + [v for v in value if v not in existing] if adding else value
+        else:
+            new = clean_value(fld, f"{existing}; {value}") if adding else value
+        if new is None or str(new).casefold() == str(existing).casefold():
+            return False
+        s.canvas[fld] = new
+        s.unknown.discard(fld)
+        s.conflicts.pop(fld, None)
+        return True
 
     @staticmethod
     def _is_user_priority_choice(
@@ -483,6 +528,16 @@ class Interviewer:
         return True
 
     @staticmethod
+    def _picked_option(fld: str, text: str) -> Any:
+        """The user's answer when it is exactly an option (or options) of a part with a fixed list,
+        as when the list is shown again and they pick from it; otherwise None."""
+        spec = CHOICE_FIELDS.get(fld)
+        if spec is None:
+            return None
+        raw: Any = [p.strip() for p in text.split(",")] if spec[1] else text.strip()
+        return clean_value(fld, raw)
+
+    @staticmethod
     def _resolve_conflict(s: InterviewState, fld: str, text: str, stance: Stance) -> str:
         """Apply the user's choice between the earlier and the new answer; returns the cue key.
 
@@ -495,11 +550,22 @@ class Interviewer:
         low = text.casefold().strip()
         keep = bool(_KEEP_EARLIER.search(low))
         take = bool(_TAKE_NEW.search(low))
-        if low == old.casefold():
+        yes, no = bool(_YES.match(low)), bool(_NO.match(low))
+        picked = Interviewer._picked_option(fld, text)
+        if picked is not None:  # chosen from the list again: that is the answer, old or new
+            if str(picked).casefold() != old.casefold():
+                s.canvas[fld] = picked
+            s.conflicts.pop(fld)
+            return "captured"
+        if stance == "unsure" or (stance == "declined" and not no):  # "no idea" is not a "no"
+            choice = None
+        elif yes != no:  # "Yes, update it" / "No, keep my earlier answer"
+            choice = "take" if yes else "keep"
+        elif low == old.casefold():
             choice = "keep"
         elif low == proposed.casefold():
             choice = "take"
-        elif stance in ("unsure", "declined") or keep == take:  # no choice, or both at once
+        elif keep == take:  # no choice, or both at once
             choice = None
         else:
             choice = "keep" if keep else "take"
@@ -554,11 +620,18 @@ class Interviewer:
         model_question: str | None,
         turn_number: int,
         amending: bool = False,
+        changed: tuple[str, ...] = (),
     ) -> Outcome:
         nxt = choose_target(s)
         s.target = nxt
         if nxt is None:
             s.question = None
+            if amending and cue == "captured" and changed:
+                names = [SHORT_NAMES[f] for f in changed]
+                joined = (
+                    names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+                )
+                return Outcome(amend_done(joined), s, "ready_for_review")
             if amending and cue in AMEND_REPLIES:  # said something after "that's everything"
                 return Outcome(AMEND_REPLIES[cue], s, "ready_for_review")
             return Outcome(READY_TEXT, s, "ready_for_review")

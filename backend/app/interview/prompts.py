@@ -56,9 +56,9 @@ ACK: dict[str, tuple[str, ...]] = {
         "I'm not sure I followed that.",
     ),
     "override": ("I can only help with completing the canvas.",),
-    "conflict": ("That's different from what you said earlier.",),
-    "unclear": ("Sorry, I couldn't tell which one you meant.",),
-    "kept_earlier": ("I still couldn't tell which you meant, so I've kept what you said first.",),
+    "conflict": ("Just checking.", "One quick check."),
+    "unclear": ("Sorry, I couldn't tell whether you want to change it. Yes or no is fine.",),
+    "kept_earlier": ("I still couldn't tell, so I've kept your earlier answer.",),
 }
 READY_TEXT = "That's everything I need. Have a look at the canvas whenever you're ready."
 # After "that's everything", when the user comes back to change something. A change that differs
@@ -233,7 +233,14 @@ CONFIRM = {
 }
 # One follow-up on the priority the user chose, so the reason is on the page too.
 PROBE = "Why did you give this idea the priority “{v}”?"
-CONFLICT = "Earlier you said “{old}”, but now I heard “{new}”. Which one should I use?"
+CONFLICT = "You said “{old}” earlier. Do you want to update it to “{new}”?"
+# For a part with a fixed list of answers (priority, opportunity type) the list is shown again.
+CONFLICT_PICK = (
+    "You chose “{old}” earlier. Do you want to change it to “{new}”? "
+    "Or pick the one you want below."
+)
+# The two ways to answer it, offered as a selection and read back by the engine as yes / no.
+CONFLICT_CHOICES = ("Yes, update it", "No, keep my earlier answer")
 
 
 def _quote(value: Any) -> str:
@@ -250,7 +257,8 @@ def render_question(
     if kind == "probe":
         return PROBE.format(v=_quote(canvas.get(field, "")))
     if kind == "clarify" and conflict_new is not None:
-        return CONFLICT.format(old=_quote(canvas.get(field, "")), new=_quote(conflict_new))
+        template = CONFLICT_PICK if field in ("priority", "opportunityTypes") else CONFLICT
+        return template.format(old=_quote(canvas.get(field, "")), new=_quote(conflict_new))
     ask, clarify = QUESTIONS[field]
     return clarify if attempts > 0 else ask
 

@@ -287,7 +287,8 @@ def test_an_unclear_reply_leaves_the_conflict_open_and_asks_again(answer):
     assert convo.state.canvas["team"] == "Ops"  # the confirmed answer is never overwritten
     assert convo.state.conflicts == {"team": "Finance"}  # still unresolved
     reply = convo.replies[-1]
-    assert "couldn't tell which" in reply and "Ops" in reply and "Finance" in reply
+    assert "couldn't tell whether" in reply and "Ops" in reply and "Finance" in reply
+    assert "Do you want to update it to “Finance”?" in reply
     assert "noted that" not in reply  # the user is not told it was captured
 
 
@@ -301,12 +302,46 @@ def test_naming_one_of_the_values_resolves_the_conflict(answer, expected):
     assert convo.state.canvas["team"] == expected and convo.state.conflicts == {}
 
 
+def test_a_contradiction_is_confirmed_with_a_plain_question_not_a_which_one_question():
+    convo = _conflict_on_team()
+    reply = convo.replies[-1]
+    assert "You said “Ops” earlier. Do you want to update it to “Finance”?" in reply
+    assert "Which one" not in reply and reply.count("?") == 1
+
+
+@pytest.mark.parametrize(
+    "answer", ["Yes", "yes, update it", "Yes, update it", "yeah", "sure", "ok"]
+)
+def test_yes_updates_the_answer(answer):
+    convo = _conflict_on_team()
+    convo.say(answer)
+    assert convo.state.canvas["team"] == "Finance" and convo.state.conflicts == {}
+
+
+@pytest.mark.parametrize(
+    "answer", ["No", "no, keep my earlier answer", "No, keep my earlier answer", "nope"]
+)
+def test_no_keeps_the_earlier_answer(answer):
+    convo = _conflict_on_team()
+    convo.say(answer)
+    assert convo.state.canvas["team"] == "Ops" and convo.state.conflicts == {}
+
+
+def test_the_confirmation_is_offered_as_a_yes_or_no_selection():
+    convo = _conflict_on_team()
+    asked = progression_view(convo.state)["outstanding_question"]
+    assert asked["choices"] == {
+        "multiple": False,
+        "options": ["Yes, update it", "No, keep my earlier answer"],
+    }
+
+
 def test_two_unclear_replies_keep_the_earlier_answer_and_say_so():
     convo = _conflict_on_team()
     convo.say("I'm not sure")
     convo.say("no idea")
     assert convo.state.canvas["team"] == "Ops" and convo.state.conflicts == {}
-    assert "kept what you said first" in convo.replies[-1]
+    assert "kept your earlier answer" in convo.replies[-1]
 
 
 def test_unsure_about_a_required_field_is_recorded_but_never_satisfies_the_validator():
@@ -613,18 +648,65 @@ def _next_says(convo: Conversation, *updates_by_turn: list) -> None:
     )
 
 
-def test_a_different_value_after_ready_asks_which_to_keep_instead_of_repeating_the_closing_line():
+def test_asking_for_a_change_after_ready_just_makes_it():
     convo = _finished()
-    old_team = convo.state.canvas["team"]
     _next_says(convo, [("team", "Finance")])
     convo.say("Change the team to Finance.")
-    reply = convo.replies[-1]
-    assert reply != READY_TEXT and "Finance" in reply and old_team in reply
-    assert convo.state.conflicts == {"team": "Finance"} and not is_ready(convo.state)
+    assert convo.state.canvas["team"] == "Finance"  # asked for, so done: no which-to-keep question
+    assert convo.state.conflicts == {} and is_ready(convo.state)
+    assert convo.replies[-1].startswith("Done, I've updated Team.") and "?" not in convo.replies[-1]
 
-    convo.say("Use the new one.")
-    assert convo.state.canvas["team"] == "Finance" and is_ready(convo.state)
-    assert convo.replies[-1] == READY_TEXT
+
+def test_a_priority_change_after_ready_is_made_at_once_when_the_user_says_priority():
+    convo = _finished()
+    _next_says(convo, [("priority", "Nice-to-have")])
+    convo.say("Update the priority to Nice-to-have")
+    assert convo.state.canvas["priority"] == "Nice-to-have" and is_ready(convo.state)
+    assert "Done, I've updated Priority" in convo.replies[-1] and "?" not in convo.replies[-1]
+
+
+def test_adding_to_an_answer_after_ready_keeps_what_was_there_and_replacing_replaces_it():
+    convo = _finished()
+    old = convo.state.canvas["systems"]
+    _next_says(convo, [("systems", "Maintenance system")])
+    convo.say("Also add the maintenance system to the systems")
+    assert convo.state.canvas["systems"] == f"{old}; Maintenance system"
+
+    _next_says(convo, [("systems", "Only the rostering tool")])
+    convo.say("Change the systems to only the rostering tool")
+    assert convo.state.canvas["systems"] == "Only the rostering tool"
+    assert is_ready(convo.state)
+
+
+def test_opportunity_types_are_added_to_when_asked_and_replaced_otherwise():
+    convo = _finished()
+    before = list(convo.state.canvas["opportunityTypes"])
+    _next_says(convo, [("opportunityTypes", ["Predict Issues"])])
+    convo.say("Also add Predict Issues to the opportunity")
+    assert convo.state.canvas["opportunityTypes"] == [*before, "Predict Issues"]
+    _next_says(convo, [("opportunityTypes", ["Analyse Data"])])
+    convo.say("Change the opportunity to Analyse Data")
+    assert convo.state.canvas["opportunityTypes"] == ["Analyse Data"]
+
+
+def test_saying_the_same_thing_again_after_ready_changes_nothing_and_asks_for_the_new_answer():
+    convo = _finished()
+    same = convo.state.canvas["team"]
+    _next_says(convo, [("team", same)])
+    convo.say(f"The team is {same}")
+    assert convo.state.canvas["team"] == same
+    assert (_asks(convo)["kind"], _asks(convo)["target"]) == ("revise", "team")
+
+
+def test_a_contradiction_in_the_middle_of_the_interview_is_still_asked_about():
+    convo = Conversation(
+        FakeExtractor(
+            Extraction([update("team", "Ops")]), Extraction([update("team", "Finance", "u2")])
+        )
+    )
+    convo.say("Ops owns it.")
+    convo.say("Actually the team is Finance.")  # not finished yet: ask before replacing
+    assert convo.state.conflicts == {"team": "Finance"} and convo.state.canvas["team"] == "Ops"
 
 
 def _asks(convo: Conversation) -> dict:
@@ -771,10 +853,48 @@ def test_a_priority_without_the_word_priority_is_not_accepted_but_asks_which_par
     assert _asks(convo)["kind"] == "pick"
 
 
-def test_the_priority_can_be_changed_in_the_users_own_words_after_ready():
-    convo = _finished()
-    _next_says(convo, [("priority", "Nice-to-have")])
-    convo.say("Change the priority to nice to have.")
-    assert convo.state.conflicts == {"priority": "Nice-to-have"}
-    convo.say("Use the new one.")
-    assert convo.state.canvas["priority"] == "Nice-to-have" and is_ready(convo.state)
+# --- a contradiction about a part with a fixed list shows the list again ----------------------------
+
+
+def _priority_conflict() -> tuple[Conversation, InterviewState]:
+    convo = Conversation()
+    state = InterviewState(
+        canvas={"priority": "Must-have"},
+        target=Target("clarify", "priority"),
+        conflicts={"priority": "Nice-to-have"},
+    )
+    state.question = "x"
+    convo.state = state
+    return convo, state
+
+
+def test_the_question_for_a_part_with_a_list_offers_the_list_not_yes_or_no():
+    convo, _ = _priority_conflict()
+    asked = progression_view(convo.state)["outstanding_question"]
+    assert asked["choices"] == {
+        "multiple": False,
+        "options": ["Must-have", "Nice-to-have", "Exploratory"],
+    }
+    from app.interview.prompts import render_question
+
+    text = render_question(
+        "clarify", "priority", convo.state.canvas, attempts=0, conflict_new="Nice-to-have"
+    )
+    assert "You chose “Must-have” earlier" in text and "change it to “Nice-to-have”" in text
+    assert "pick the one you want below" in text and text.count("?") == 1
+
+
+@pytest.mark.parametrize(
+    ("pick", "expected"),
+    [("Nice-to-have", "Nice-to-have"), ("Exploratory", "Exploratory"), ("Must-have", "Must-have")],
+)
+def test_picking_from_the_list_again_is_the_answer_whichever_it_is(pick, expected):
+    convo, _ = _priority_conflict()
+    convo.say(pick)
+    assert convo.state.canvas["priority"] == expected and convo.state.conflicts == {}
+
+
+def test_yes_still_updates_a_part_with_a_list():
+    convo, _ = _priority_conflict()
+    convo.say("yes")
+    assert convo.state.canvas["priority"] == "Nice-to-have" and convo.state.conflicts == {}
