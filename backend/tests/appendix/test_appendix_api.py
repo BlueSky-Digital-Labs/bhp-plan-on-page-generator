@@ -10,7 +10,7 @@ import pytest
 from pypdf import PdfReader
 
 from tests.access.conftest import csrf
-from tests.interview.conftest import OPENING, browser
+from tests.interview.conftest import OPENING, FakeExtractor, browser
 from tests.interview.test_interview_api import answer_for, history, say, wire
 
 FORMATS = {"pdf": "application/pdf", "json": "application/json"}
@@ -171,9 +171,11 @@ def test_a_new_answer_takes_the_canvas_out_of_ready_so_the_next_download_is_a_dr
     client = browser(world)
     finish(client)
     assert appendix(client, "json").json()["draft"] is False
-    say(
-        client, "Actually, it also needs to cover night shifts."
-    )  # the interviewer asks a follow-up
+    # An answer that only opens a question (which part to change?) leaves the canvas unfinished.
+    # A request that names a new value is applied at once and keeps it ready; that is covered in
+    # tests/interview. Here the model finds nothing to record, so the assistant asks which part.
+    world.conversation._producer._interviewer._extractor = FakeExtractor()
+    say(client, "Can you fix something?")
     assert history(client)["canvas"]["ready_for_review"] is False
     assert appendix(client, "json").json()["draft"] is True
 
