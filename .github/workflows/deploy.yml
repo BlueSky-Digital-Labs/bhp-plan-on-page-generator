@@ -22,7 +22,7 @@ on:
   push:
     # TEMPORARY: feature/aws-setup is listed so the pipeline can be tried from this branch (a manual
     # run only works for a workflow that is already on the default branch). Remove it before merging.
-    branches: [main, feature/aws-setup]
+    branches: [main]
     paths-ignore:
       - "**.md"
       - docs/**
